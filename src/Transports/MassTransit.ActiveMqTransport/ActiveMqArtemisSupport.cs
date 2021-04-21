@@ -4,6 +4,9 @@ using System.Text;
 
 namespace MassTransit.ActiveMqTransport
 {
+    /// <summary>
+    /// The configuration class to enable Artemis support
+    /// </summary>
     public static class ActiveMqArtemisSupport
     {
         /// <summary>
