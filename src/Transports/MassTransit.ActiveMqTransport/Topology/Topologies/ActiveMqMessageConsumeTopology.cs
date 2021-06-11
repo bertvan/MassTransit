@@ -20,7 +20,7 @@ namespace MassTransit.ActiveMqTransport.Topology.Topologies
         readonly IActiveMqMessagePublishTopology<TMessage> _publishTopology;
         readonly IList<IActiveMqConsumeTopologySpecification> _specifications;
 
-        public ActiveMqMessageConsumeTopology(IActiveMqMessagePublishTopology<TMessage> publishTopology)
+        public ActiveMqMessageConsumeTopology(IActiveMqMessagePublishTopology<TMessage> publishTopology, ActiveMqConsumerNameProvider consumerNameProvider)
         {
             _publishTopology = publishTopology;
 
