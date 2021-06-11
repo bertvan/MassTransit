@@ -28,6 +28,7 @@
 
             _hostSettings = new ConfigurationHostSettings(new Uri("activemq://localhost"));
             _hostTopology = new ActiveMqHostTopology(this, topologyConfiguration);
+            //_busConfiguration.Publish.
 
             ConnectionContextSupervisor = new ConnectionContextSupervisor(this, topologyConfiguration);
         }

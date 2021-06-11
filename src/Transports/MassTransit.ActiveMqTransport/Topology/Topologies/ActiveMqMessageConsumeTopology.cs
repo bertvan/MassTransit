@@ -22,20 +22,14 @@ namespace MassTransit.ActiveMqTransport.Topology.Topologies
         readonly IActiveMqMessagePublishTopology<TMessage> _publishTopology;
         readonly IList<IActiveMqConsumeTopologySpecification> _specifications;
 
-        public ActiveMqMessageConsumeTopology(IMessageTopology<TMessage> messageTopology, IActiveMqMessagePublishTopology<TMessage> publishTopology)
+        public ActiveMqMessageConsumeTopology(IMessageTopology<TMessage> messageTopology, IActiveMqMessagePublishTopology<TMessage> publishTopology, ActiveMqConsumerNameProvider consumerNameProvider)
         {
             _messageTopology = messageTopology;
             _publishTopology = publishTopology;
 
-            _consumerName = $"Consumer.{{queue}}.VirtualTopic.{messageTopology.EntityName}";
-            if (ActiveMqArtemisSupport.EnableArtemisVirtualTopicNamingSupport)
-            {
-                _consumerName = $"VirtualTopic.{messageTopology.EntityName}::Consumer.{{queue}}.VirtualTopic.{messageTopology.EntityName}";
-            }
+            _consumerName = consumerNameProvider.GetConsumerName(messageTopology.EntityName);
 
             _specifications = new List<IActiveMqConsumeTopologySpecification>();
-
-
         }
 
         public void Apply(IReceiveEndpointBrokerTopologyBuilder builder)

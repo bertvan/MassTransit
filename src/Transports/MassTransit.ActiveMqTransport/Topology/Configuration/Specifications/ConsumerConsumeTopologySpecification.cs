@@ -40,7 +40,7 @@ namespace MassTransit.ActiveMqTransport.Topology.Specifications
 
             var destinationQueue = builder.Queue.Queue;
 
-            var consumerQueueName = _consumerName.Replace("{queue}", destinationQueue.EntityName);
+            var consumerQueueName = _consumerName.Replace("{queue}", destinationQueue.EntityName); // TODO BERT: belangrijk om de queue name te bepalen? Zie {{queue}} in code
 
             var queue = builder.CreateQueue(consumerQueueName, destinationQueue.Durable, destinationQueue.AutoDelete);
 

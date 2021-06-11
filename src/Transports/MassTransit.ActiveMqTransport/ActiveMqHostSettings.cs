@@ -39,6 +39,8 @@
 
         Uri BrokerAddress { get; }
 
+        ActiveMqFlavor Flavor { get; }
+
         IConnection CreateConnection();
     }
 }

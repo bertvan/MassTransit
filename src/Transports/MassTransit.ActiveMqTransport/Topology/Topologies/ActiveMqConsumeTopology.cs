@@ -17,7 +17,10 @@ namespace MassTransit.ActiveMqTransport.Topology.Topologies
         readonly IMessageTopology _messageTopology;
         readonly IActiveMqPublishTopology _publishTopology;
         readonly IList<IActiveMqConsumeTopologySpecification> _specifications;
-        
+
+        ActiveMqConsumerNameProvider _consumerNameProvider;
+        string _queueNamePrefix;
+
         public ActiveMqConsumeTopology(IMessageTopology messageTopology, IActiveMqPublishTopology publishTopology)
         {
             _messageTopology = messageTopology;
@@ -37,6 +40,21 @@ namespace MassTransit.ActiveMqTransport.Topology.Topologies
                 throw new ArgumentNullException(nameof(specification));
 
             _specifications.Add(specification);
+        }
+
+        public void UseBrokerFlavor(ActiveMqFlavor flavor)
+        {
+            if (flavor == ActiveMqFlavor.Artemis)
+            {
+                _consumerNameProvider = new FqqnConsumerNameProvider();
+            }
+
+            _consumerNameProvider = new ClassicConsumerNameProvider();
+        }
+
+        public void UsePrefix(string queueNamePrefix)
+        {
+            _queueNamePrefix = queueNamePrefix;
         }
 
         IActiveMqMessageConsumeTopologyConfigurator<T> IActiveMqConsumeTopologyConfigurator.GetMessageTopology<T>()
@@ -71,12 +89,7 @@ namespace MassTransit.ActiveMqTransport.Topology.Topologies
         public override string CreateTemporaryQueueName(string tag)
         {
             var result = base.CreateTemporaryQueueName(tag);
-            var tempName = new string(result.Where(c => c != '.').ToArray());
-            // Only add prefix if NamespaceSupport has been enabled
-            if (ActiveMqArtemisSupport.EnableNamespaceSupport)
-            {
-                tempName = $"{ActiveMqArtemisSupport.TemporaryQueueNamePrefix}{tempName}";
-            }
+            var tempName = $"{_queueNamePrefix}{new string(result.Where(c => c != '.').ToArray())}";
             return tempName;
         }
 
@@ -87,7 +100,7 @@ namespace MassTransit.ActiveMqTransport.Topology.Topologies
 
         protected override IMessageConsumeTopologyConfigurator CreateMessageTopology<T>(Type type)
         {
-            var messageTopology = new ActiveMqMessageConsumeTopology<T>(_messageTopology.GetMessageTopology<T>(), _publishTopology.GetMessageTopology<T>());
+            var messageTopology = new ActiveMqMessageConsumeTopology<T>(_messageTopology.GetMessageTopology<T>(), _publishTopology.GetMessageTopology<T>(), _consumerNameProvider);
 
             OnMessageTopologyCreated(messageTopology);
 

@@ -38,6 +38,8 @@ namespace MassTransit.ActiveMqTransport.Topology.Topologies
 
         public Topic Topic => _topic;
 
+        //bool UseArtemisFqqn => 
+
         bool ITopicConfigurator.Durable
         {
             set => _topic.Durable = value;

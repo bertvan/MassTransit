@@ -56,7 +56,7 @@
                         break;
                 }
 
-                if (header.Key == "AMQ_SCHEDULED_DELAY")
+                if (header.Key == "AMQ_SCHEDULED_DELAY") // todo bert: headername provider afhankelijk van flavour
                 {
                     headers.Set(header.Key, null);
                 }

@@ -29,6 +29,11 @@ namespace MassTransit.ActiveMqTransport.Configurators
             _settings.Password = password;
         }
 
+        public void ActiveMqFlavor(ActiveMqFlavor flavor)
+        {
+            _settings.Flavor = flavor;
+        }
+
         public void UseSsl()
         {
             _settings.UseSsl = true;

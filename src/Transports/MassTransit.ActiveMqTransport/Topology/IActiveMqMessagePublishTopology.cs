@@ -13,6 +13,8 @@ namespace MassTransit.ActiveMqTransport.Topology
     {
         Topic Topic { get; }
 
+        //bool UseArtemisFqqn { get; }
+
         /// <summary>
         /// Returns the send settings for a publish endpoint, which are mostly unused now with topology
         /// </summary>

@@ -9,7 +9,6 @@ namespace MassTransit.ActiveMqTransport.Pipeline
     using GreenPipes;
     using GreenPipes.Agents;
     using GreenPipes.Internals.Extensions;
-    using Microsoft.Extensions.Logging;
     using Topology;
     using Transports;
     using Transports.Metrics;
@@ -60,18 +59,6 @@ namespace MassTransit.ActiveMqTransport.Pipeline
         long DeliveryMetrics.DeliveryCount => _dispatcher.DispatchCount;
         int DeliveryMetrics.ConcurrentDeliveryCount => _dispatcher.MaxConcurrentDispatchCount;
 
-        static readonly LogMessage<string> _logConnectionInfo = LogContext.Define<string>(LogLevel.Debug, "Connection info: {info}");
-
-        Uri GetRemoteAddress(IConnection connection)
-        {
-            if (connection is Apache.NMS.ActiveMQ.Connection conn)
-            {
-                return conn.ITransport?.RemoteAddress;
-            }
-
-            return null;
-        }
-
         void HandleMessage(IMessage message)
         {
             _executor.PushWithWait(async () =>
@@ -82,11 +69,6 @@ namespace MassTransit.ActiveMqTransport.Pipeline
                 {
                     await WaitAndAbandonMessage().ConfigureAwait(false);
                     return;
-                }
-
-                if (ActiveMqArtemisSupport.EnableExtraConnectionLogging)
-                {
-                    _logConnectionInfo($"Received message from {GetRemoteAddress(_session.ConnectionContext?.Connection)}");
                 }
 
                 var context = new ActiveMqReceiveContext(message, _context, _receiveSettings, _session, _session.ConnectionContext);

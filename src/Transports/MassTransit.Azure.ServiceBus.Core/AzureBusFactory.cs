@@ -22,6 +22,7 @@
         {
             var topologyConfiguration = new ServiceBusTopologyConfiguration(MessageTopology);
             var busConfiguration = new ServiceBusBusConfiguration(topologyConfiguration);
+            
 
             var configurator = new ServiceBusBusFactoryConfigurator(busConfiguration);
 

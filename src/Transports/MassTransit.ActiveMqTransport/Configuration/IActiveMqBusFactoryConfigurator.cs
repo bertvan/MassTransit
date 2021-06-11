@@ -35,5 +35,7 @@
         /// <param name="settings"></param>
         /// <returns></returns>
         void Host(ActiveMqHostSettings settings);
+
+        void UseBrokerFlavor(ActiveMqFlavor flavor);
     }
 }

@@ -4,9 +4,6 @@ namespace MassTransit.ActiveMqTransport.Configurators
     using System.Collections.Generic;
     using System.Linq;
     using Apache.NMS;
-    using Context;
-    using Microsoft.Extensions.Logging;
-    using Newtonsoft.Json;
 
 
     public class ConfigurationHostSettings :
@@ -53,53 +50,18 @@ namespace MassTransit.ActiveMqTransport.Configurators
         public string Password { get; set; }
         public bool UseSsl { get; set; }
 
+        public ActiveMqFlavor Flavor { get; set; }
+
         public Uri HostAddress => _hostAddress.Value;
         public Uri BrokerAddress => _brokerAddress.Value;
-
-        static readonly LogMessage<string> _logDebug = LogContext.Define<string>(LogLevel.Debug, "Connection info: {info}");
 
         public IConnection CreateConnection()
         {
             var factory = new NMSConnectionFactory(BrokerAddress);
 
-            if (ActiveMqArtemisSupport.EnableExtraConnectionLogging)
-            {
-                _logDebug($"Creating connection to {BrokerAddress}");
-            }
-
             var connection = factory.CreateConnection(Username, Password);
 
-            if (ActiveMqArtemisSupport.EnableExtraConnectionLogging)
-            {
-                _logDebug($"Connection created: {GetRemoteAddress(connection)}");
-
-                connection.ConnectionInterruptedListener += () =>
-                {
-                    _logDebug($"Connection interrupted: {GetRemoteAddress(connection)}");
-                };
-
-                connection.ConnectionResumedListener += () =>
-                {
-                    _logDebug($"Connection resumed: {GetRemoteAddress(connection)}");
-                };
-
-                connection.ExceptionListener += e =>
-                {
-                    _logDebug($"An exception occurred: {e.Message}", e);
-                };
-            }
-
             return connection;
-        }
-
-        Uri GetRemoteAddress(IConnection connection)
-        {
-            if (connection is Apache.NMS.ActiveMQ.Connection conn)
-            {
-                return conn.ITransport?.RemoteAddress;
-            }
-
-            return null;
         }
 
         Uri FormatHostAddress()

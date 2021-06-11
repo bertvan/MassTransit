@@ -49,6 +49,16 @@
             _busConfiguration.HostConfiguration.Settings = settings;
         }
 
+        public void UseBrokerFlavor(ActiveMqFlavor flavor)
+        {
+            if (flavor == ActiveMqFlavor.Artemis)
+            {
+
+            }
+
+            _busConfiguration.Topology.Consume.UseBrokerFlavor(flavor);
+        }
+
         void IActiveMqBusFactoryConfigurator.Send<T>(Action<IActiveMqMessageSendTopologyConfigurator<T>> configureTopology)
         {
             IActiveMqMessageSendTopologyConfigurator<T> configurator = _busConfiguration.Topology.Send.GetMessageTopology<T>();
