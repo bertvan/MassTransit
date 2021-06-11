@@ -2,12 +2,12 @@ namespace MassTransit.Registration
 {
     using System;
     using Automatonymous;
-    using Conductor;
-    using Conductor.Configurators;
+    using Configurators;
     using ConsumeConfigurators;
     using Context;
     using Courier;
     using Definition;
+    using Futures;
     using Internals.Extensions;
     using Metadata;
     using Microsoft.Extensions.Logging;
@@ -24,8 +24,10 @@ namespace MassTransit.Registration
         readonly RegistrationCache<IConsumerRegistration> _consumers;
         readonly RegistrationCache<IEndpointRegistration> _endpoints;
         readonly RegistrationCache<IExecuteActivityRegistration> _executeActivities;
+        readonly RegistrationCache<IFutureRegistration> _futures;
         readonly RegistrationCache<ISagaRegistration> _sagas;
         bool _configured;
+        ISagaRepositoryRegistrationProvider _sagaRepositoryRegistrationProvider;
 
         protected RegistrationConfigurator(IContainerRegistrar registrar = null)
         {
@@ -35,7 +37,10 @@ namespace MassTransit.Registration
             _sagas = new RegistrationCache<ISagaRegistration>();
             _executeActivities = new RegistrationCache<IExecuteActivityRegistration>();
             _activities = new RegistrationCache<IActivityRegistration>();
+            _futures = new RegistrationCache<IFutureRegistration>();
             _endpoints = new RegistrationCache<IEndpointRegistration>();
+
+            _sagaRepositoryRegistrationProvider = new SagaRepositoryRegistrationProvider();
         }
 
         protected IRegistrationCache<IActivityRegistration> Activities => _activities;
@@ -43,10 +48,11 @@ namespace MassTransit.Registration
         protected IRegistrationCache<IEndpointRegistration> Endpoints => _endpoints;
         protected IRegistrationCache<IExecuteActivityRegistration> ExecuteActivities => _executeActivities;
         protected IRegistrationCache<ISagaRegistration> Sagas => _sagas;
+        protected IRegistrationCache<IFutureRegistration> Futures => _futures;
 
         public IContainerRegistrar Registrar { get; }
 
-        protected Func<IConfigurationServiceProvider, IBus, IClientFactory> ClientFactoryProvider { get; private set; } = BusClientFactoryProvider;
+        protected Func<IConfigurationServiceProvider, IBus, IClientFactory> ClientFactoryProvider { get; } = BusClientFactoryProvider;
 
         public IConsumerRegistrationConfigurator<T> AddConsumer<T>(Action<IConsumerConfigurator<T>> configure)
             where T : class, IConsumer
@@ -132,10 +138,7 @@ namespace MassTransit.Registration
             if (sagaType.HasInterface<SagaStateMachineInstance>())
                 throw new ArgumentException($"State machine sagas must be registered using AddSagaStateMachine: {TypeMetadataCache.GetShortName(sagaType)}");
 
-            _sagas.GetOrAdd(sagaType, type => SagaRegistrationCache.CreateRegistration(type, Registrar));
-
-            if (sagaDefinitionType != null)
-                SagaDefinitionRegistrationCache.Register(sagaDefinitionType, Registrar);
+            SagaRegistrationCache.AddSaga(this, _sagaRepositoryRegistrationProvider, sagaType, sagaDefinitionType);
         }
 
         public ISagaRegistrationConfigurator<T> AddSagaStateMachine<TStateMachine, T>(Action<ISagaConfigurator<T>> configure = null)
@@ -168,7 +171,7 @@ namespace MassTransit.Registration
 
         public void AddSagaStateMachine(Type sagaType, Type sagaDefinitionType)
         {
-            SagaStateMachineRegistrationCache.AddSagaStateMachine(this, sagaType, sagaDefinitionType);
+            SagaStateMachineRegistrationCache.AddSagaStateMachine(this, sagaType, _sagaRepositoryRegistrationProvider, sagaDefinitionType);
         }
 
         public IExecuteActivityRegistrationConfigurator<TActivity, TArguments> AddExecuteActivity<TActivity, TArguments>(
@@ -248,6 +251,37 @@ namespace MassTransit.Registration
                 type => ActivityRegistrationCache.CreateRegistration(type, activityDefinitionType, Registrar));
         }
 
+        public IFutureRegistrationConfigurator<TFuture> AddFuture<TFuture>(Type futureDefinitionType)
+            where TFuture : MassTransitStateMachine<FutureState>
+        {
+            IFutureRegistration ValueFactory(Type type)
+            {
+                FutureRegistrationCache.Register(typeof(TFuture), Registrar);
+
+                return new FutureRegistration<TFuture>();
+            }
+
+            _futures.GetOrAdd(typeof(TFuture), ValueFactory);
+
+            if (futureDefinitionType != null)
+                FutureDefinitionRegistrationCache.Register(futureDefinitionType, Registrar);
+
+            return new FutureRegistrationConfigurator<TFuture>(this);
+        }
+
+        public void AddFuture(Type futureType, Type futureDefinitionType)
+        {
+            FutureRegistrationCache.AddFuture(this, futureType, futureDefinitionType);
+        }
+
+        public void AddConfigureEndpointsCallback(ConfigureEndpointsCallback callback)
+        {
+            if (callback == null)
+                throw new ArgumentNullException(nameof(callback));
+
+            Registrar.RegisterSingleInstance<IConfigureReceiveEndpoint>(provider => new DelegateConfigureReceiveEndpoint(callback));
+        }
+
         public void AddEndpoint(Type definitionType)
         {
             _endpoints.GetOrAdd(definitionType, type => EndpointRegistrationCache.CreateRegistration(definitionType, Registrar));
@@ -279,15 +313,14 @@ namespace MassTransit.Registration
             Registrar.RegisterRequestClient<T>(destinationAddress, timeout);
         }
 
-        public void AddServiceClient(Action<IServiceClientConfigurator> configure = default)
+        public void AddRequestClient(Type requestType, RequestTimeout timeout = default)
         {
-            var configurator = new ServiceClientConfigurator();
+            RequestClientRegistrationCache.Register(requestType, timeout, Registrar);
+        }
 
-            configure?.Invoke(configurator);
-
-            Registrar.RegisterSingleInstance(configurator.Options);
-
-            ClientFactoryProvider = ServiceClientClientFactoryProvider;
+        public void AddRequestClient(Type requestType, Uri destinationAddress, RequestTimeout timeout = default)
+        {
+            RequestClientRegistrationCache.Register(requestType, destinationAddress, timeout, Registrar);
         }
 
         public void SetEndpointNameFormatter(IEndpointNameFormatter endpointNameFormatter)
@@ -300,9 +333,23 @@ namespace MassTransit.Registration
             registration.Register(Registrar);
         }
 
+        public ISagaRegistrationConfigurator<T> AddSagaRepository<T>()
+            where T : class, ISaga
+        {
+            return new SagaRegistrationConfigurator<T>(this, Registrar);
+        }
+
+        public void SetSagaRepositoryProvider(ISagaRepositoryRegistrationProvider provider)
+        {
+            if (provider == null)
+                throw new ArgumentNullException(nameof(provider));
+
+            _sagaRepositoryRegistrationProvider = provider;
+        }
+
         protected IRegistration CreateRegistration(IConfigurationServiceProvider provider)
         {
-            return new Registration(provider, Consumers, Sagas, ExecuteActivities, Activities);
+            return new Registration(provider, Consumers, Sagas, ExecuteActivities, Activities, Futures);
         }
 
         protected void ThrowIfAlreadyConfigured(string methodName)
@@ -323,11 +370,6 @@ namespace MassTransit.Registration
         static IClientFactory BusClientFactoryProvider(IConfigurationServiceProvider provider, IBus bus)
         {
             return bus.CreateClientFactory();
-        }
-
-        static IClientFactory ServiceClientClientFactoryProvider(IConfigurationServiceProvider provider, IBus bus)
-        {
-            return bus.CreateServiceClient();
         }
     }
 }

@@ -1,16 +1,16 @@
 namespace MassTransit.Azure.Table.Tests.Saga
 {
+    using System;
+    using System.Threading.Tasks;
+    using Automatonymous;
+    using GreenPipes;
+    using Microsoft.Extensions.DependencyInjection;
+    using NUnit.Framework;
+    using TestFramework.Sagas;
+
+
     namespace ContainerTests
     {
-        using System;
-        using System.Threading.Tasks;
-        using Automatonymous;
-        using GreenPipes;
-        using Microsoft.Extensions.DependencyInjection;
-        using NUnit.Framework;
-        using TestFramework.Sagas;
-
-
         public class Using_optimistic_concurrency :
             AzureTableInMemoryTestFixture
         {
@@ -27,8 +27,8 @@ namespace MassTransit.Azure.Table.Tests.Saga
             [Test]
             public async Task Should_work_as_expected()
             {
-                Task<ConsumeContext<TestStarted>> started = ConnectPublishHandler<TestStarted>();
-                Task<ConsumeContext<TestUpdated>> updated = ConnectPublishHandler<TestUpdated>();
+                Task<ConsumeContext<TestStarted>> started = await ConnectPublishHandler<TestStarted>();
+                Task<ConsumeContext<TestUpdated>> updated = await ConnectPublishHandler<TestUpdated>();
 
                 var correlationId = NewId.NextGuid();
 

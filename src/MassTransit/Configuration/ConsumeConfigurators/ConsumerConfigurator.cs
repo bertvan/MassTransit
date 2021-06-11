@@ -54,10 +54,22 @@
             return _specification.Options(configure);
         }
 
+        public T Options<T>(T options, Action<T> configure = null)
+            where T : IOptions
+        {
+            return _specification.Options(options, configure);
+        }
+
         public bool TryGetOptions<T>(out T options)
             where T : IOptions
         {
             return _specification.TryGetOptions(out options);
+        }
+
+        public IEnumerable<T> SelectOptions<T>()
+            where T : class
+        {
+            return _specification.SelectOptions<T>();
         }
 
         public IEnumerable<ValidationResult> Validate()

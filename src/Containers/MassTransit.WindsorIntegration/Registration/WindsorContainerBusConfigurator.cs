@@ -22,8 +22,7 @@ namespace MassTransit.WindsorIntegration.Registration
             IBusRegistrationContext CreateRegistrationContext(IKernel context)
             {
                 var provider = context.Resolve<IConfigurationServiceProvider>();
-                var busHealth = context.Resolve<BusHealth>();
-                return new BusRegistrationContext(provider, busHealth, Endpoints, Consumers, Sagas, ExecuteActivities, Activities);
+                return new BusRegistrationContext(provider, Endpoints, Consumers, Sagas, ExecuteActivities, Activities, Futures);
             }
 
             Container = container;
@@ -59,10 +58,6 @@ namespace MassTransit.WindsorIntegration.Registration
                     .LifestyleTransient(),
                 Component.For<IClientFactory>()
                     .UsingFactoryMethod(kernel => ClientFactoryProvider(kernel.Resolve<IConfigurationServiceProvider>(), kernel.Resolve<IBus>()))
-                    .LifestyleSingleton(),
-                Component.For<BusHealth>()
-                    .Forward<IBusHealth>()
-                    .UsingFactoryMethod(() => new BusHealth(nameof(IBus)))
                     .LifestyleSingleton()
             );
         }
@@ -84,6 +79,7 @@ namespace MassTransit.WindsorIntegration.Registration
 
             Container.Register(
                 Component.For<IBusInstance>()
+                    .Forward<IReceiveEndpointConnector>()
                     .UsingFactoryMethod(kernel => busFactory.CreateBus(kernel.Resolve<IBusRegistrationContext>()))
                     .LifestyleSingleton(),
                 Component.For<IBusControl>()
@@ -91,6 +87,10 @@ namespace MassTransit.WindsorIntegration.Registration
                     .LifestyleSingleton(),
                 Component.For<IBus>()
                     .UsingFactoryMethod(kernel => kernel.Resolve<IBusInstance>().Bus)
+                    .LifestyleSingleton(),
+            #pragma warning disable 618
+                Component.For<IBusHealth>()
+                    .UsingFactoryMethod(kernel => new BusHealth(kernel.Resolve<IBusInstance>()))
                     .LifestyleSingleton()
             );
         }

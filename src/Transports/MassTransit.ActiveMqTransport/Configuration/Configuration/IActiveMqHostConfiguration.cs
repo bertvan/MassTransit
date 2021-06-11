@@ -1,7 +1,6 @@
 ﻿namespace MassTransit.ActiveMqTransport.Configuration
 {
     using System;
-    using GreenPipes;
     using MassTransit.Configuration;
     using Topology;
     using Topology.Settings;
@@ -12,13 +11,9 @@
         IHostConfiguration,
         IReceiveConfigurator<IActiveMqReceiveEndpointConfigurator>
     {
-        string Description { get; }
-
         ActiveMqHostSettings Settings { get; set; }
 
         IConnectionContextSupervisor ConnectionContextSupervisor { get; }
-
-        IRetryPolicy ConnectionRetryPolicy { get; }
 
         new IActiveMqHostTopology HostTopology { get; }
 

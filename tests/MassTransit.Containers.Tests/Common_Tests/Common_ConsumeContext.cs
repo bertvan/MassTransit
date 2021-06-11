@@ -5,6 +5,7 @@ namespace MassTransit.Containers.Tests.Common_Tests
     using System.Threading.Tasks;
     using ConsumeContextTestSubjects;
     using Context;
+    using GreenPipes;
     using NUnit.Framework;
     using TestFramework;
     using TestFramework.Messages;
@@ -25,16 +26,13 @@ namespace MassTransit.Containers.Tests.Common_Tests
 
             var consumeContext = await ConsumeContext;
 
-            Assert.That(consumeContext.TryGetPayload(out MessageConsumeContext<PingMessage> messageConsumeContext),
-                "Is MessageConsumeContext");
+            Assert.That(consumeContext.TryGetPayload(out MessageConsumeContext<PingMessage> _), "Is MessageConsumeContext");
 
             var publishEndpoint = await PublishEndpoint;
             var sendEndpointProvider = await SendEndpointProvider;
 
-            Assert.That(publishEndpoint, Is.TypeOf<MessageConsumeContext<PingMessage>>());
-            Assert.That(sendEndpointProvider, Is.TypeOf<MessageConsumeContext<PingMessage>>());
             Assert.That(ReferenceEquals(publishEndpoint, sendEndpointProvider), "ReferenceEquals(publishEndpoint, sendEndpointProvider)");
-            Assert.That(ReferenceEquals(messageConsumeContext, sendEndpointProvider), "ReferenceEquals(messageConsumeContext, sendEndpointProvider)");
+            Assert.That(ReferenceEquals(consumeContext, sendEndpointProvider), "ReferenceEquals(messageConsumeContext, sendEndpointProvider)");
         }
 
         protected void ConfigureRegistration(IBusRegistrationConfigurator configurator)
@@ -66,23 +64,19 @@ namespace MassTransit.Containers.Tests.Common_Tests
         [Test]
         public async Task Should_provide_the_outbox()
         {
-            Task<ConsumeContext<Fault<PingMessage>>> fault = ConnectPublishHandler<Fault<PingMessage>>();
+            Task<ConsumeContext<Fault<PingMessage>>> fault = await ConnectPublishHandler<Fault<PingMessage>>();
 
             await InputQueueSendEndpoint.Send(new PingMessage());
 
             var consumeContext = await ConsumeContext;
 
-            Assert.That(
-                consumeContext.TryGetPayload(out InMemoryOutboxConsumeContext<PingMessage> outboxConsumeContext),
-                "Is ConsumerConsumeContext");
+            Assert.That(consumeContext.TryGetPayload(out InMemoryOutboxConsumeContext<PingMessage> _), "Is ConsumerConsumeContext");
 
             var publishEndpoint = await PublishEndpoint;
             var sendEndpointProvider = await SendEndpointProvider;
 
-            Assert.That(publishEndpoint, Is.TypeOf<InMemoryOutboxConsumeContext<PingMessage>>());
-            Assert.That(sendEndpointProvider, Is.TypeOf<InMemoryOutboxConsumeContext<PingMessage>>());
             Assert.That(ReferenceEquals(publishEndpoint, sendEndpointProvider), "ReferenceEquals(publishEndpoint, sendEndpointProvider)");
-            Assert.That(ReferenceEquals(outboxConsumeContext, sendEndpointProvider), "ReferenceEquals(outboxConsumeContext, sendEndpointProvider)");
+            Assert.That(ReferenceEquals(consumeContext, sendEndpointProvider), "ReferenceEquals(outboxConsumeContext, sendEndpointProvider)");
 
             await fault;
 
@@ -104,6 +98,130 @@ namespace MassTransit.Containers.Tests.Common_Tests
     }
 
 
+    public abstract class Common_ConsumeContext_Outbox_Batch :
+        InMemoryTestFixture
+    {
+        protected Common_ConsumeContext_Outbox_Batch()
+        {
+            TestTimeout = TimeSpan.FromSeconds(3);
+        }
+
+        protected abstract IBusRegistrationContext Registration { get; }
+        protected abstract Task<ConsumeContext> ConsumeContext { get; }
+        protected abstract Task<IPublishEndpoint> PublishEndpoint { get; }
+        protected abstract Task<ISendEndpointProvider> SendEndpointProvider { get; }
+
+        [Test]
+        public async Task Should_provide_the_outbox()
+        {
+            Task<ConsumeContext<Fault<PingMessage>>> fault = await ConnectPublishHandler<Fault<PingMessage>>();
+
+            await InputQueueSendEndpoint.Send(new PingMessage());
+            await InputQueueSendEndpoint.Send(new PingMessage());
+            await InputQueueSendEndpoint.Send(new PingMessage());
+            await InputQueueSendEndpoint.Send(new PingMessage());
+
+            var consumeContext = await ConsumeContext;
+
+            Assert.That(consumeContext.TryGetPayload(out InMemoryOutboxConsumeContext<Batch<PingMessage>> _), "Is ConsumerConsumeContext");
+
+            var publishEndpoint = await PublishEndpoint;
+            var sendEndpointProvider = await SendEndpointProvider;
+
+            Assert.That(ReferenceEquals(publishEndpoint, sendEndpointProvider), "ReferenceEquals(publishEndpoint, sendEndpointProvider)");
+            Assert.That(ReferenceEquals(consumeContext, sendEndpointProvider), "ReferenceEquals(outboxConsumeContext, sendEndpointProvider)");
+
+            await fault;
+
+            Assert.That(InMemoryTestHarness.Published.Select<ServiceDidIt>().Any(), Is.False, "Outbox Did Not Intercept!");
+        }
+
+        protected void ConfigureRegistration(IBusRegistrationConfigurator configurator)
+        {
+            configurator.AddConsumer<DependentBatchConsumer>(x =>
+                x.Options<BatchOptions>(b => b.SetTimeLimit(200).SetMessageLimit(4)));
+
+            configurator.AddBus(provider => BusControl);
+        }
+
+        protected override void ConfigureInMemoryReceiveEndpoint(IInMemoryReceiveEndpointConfigurator configurator)
+        {
+            configurator.UseScheduledRedelivery(r => r.None());
+            configurator.UseMessageRetry(r => r.None());
+            configurator.UseInMemoryOutbox();
+
+            ConfigureUnitOfWork(configurator);
+
+            configurator.ConfigureConsumers(Registration);
+        }
+
+        protected virtual void ConfigureUnitOfWork(IInMemoryReceiveEndpointConfigurator configurator)
+        {
+        }
+    }
+
+
+    public abstract class Common_ConsumeContext_Filter_Batch :
+        InMemoryTestFixture
+    {
+        protected Common_ConsumeContext_Filter_Batch()
+        {
+            TestTimeout = TimeSpan.FromSeconds(3);
+        }
+
+        protected abstract IBusRegistrationContext Registration { get; }
+        protected abstract Task<ConsumeContext> ConsumeContext { get; }
+        protected abstract Task<IPublishEndpoint> PublishEndpoint { get; }
+        protected abstract Task<ISendEndpointProvider> SendEndpointProvider { get; }
+
+        [Test]
+        public async Task Should_provide_the_outbox()
+        {
+            Task<ConsumeContext<Fault<PingMessage>>> fault = await ConnectPublishHandler<Fault<PingMessage>>();
+
+            await InputQueueSendEndpoint.Send(new PingMessage());
+            await InputQueueSendEndpoint.Send(new PingMessage());
+            await InputQueueSendEndpoint.Send(new PingMessage());
+            await InputQueueSendEndpoint.Send(new PingMessage());
+
+            var consumeContext = await ConsumeContext;
+
+            Assert.That(consumeContext.TryGetPayload(out InMemoryOutboxConsumeContext<Batch<PingMessage>> _), "Is ConsumerConsumeContext");
+
+            var publishEndpoint = await PublishEndpoint;
+            var sendEndpointProvider = await SendEndpointProvider;
+
+            Assert.That(ReferenceEquals(publishEndpoint, sendEndpointProvider), "ReferenceEquals(publishEndpoint, sendEndpointProvider)");
+            Assert.That(ReferenceEquals(consumeContext, sendEndpointProvider), "ReferenceEquals(outboxConsumeContext, sendEndpointProvider)");
+
+            await fault;
+
+            Assert.That(InMemoryTestHarness.Published.Select<ServiceDidIt>().Any(), Is.False, "Outbox Did Not Intercept!");
+        }
+
+        protected void ConfigureRegistration(IBusRegistrationConfigurator configurator)
+        {
+            configurator.AddConsumer<DependentBatchConsumer>(x =>
+                x.Options<BatchOptions>(b => b.SetTimeLimit(200).SetMessageLimit(4)));
+
+            configurator.AddBus(provider => BusControl);
+        }
+
+        protected override void ConfigureInMemoryReceiveEndpoint(IInMemoryReceiveEndpointConfigurator configurator)
+        {
+            configurator.UseInMemoryOutbox();
+
+            ConfigureUnitOfWork(configurator);
+
+            configurator.ConfigureConsumers(Registration);
+        }
+
+        protected virtual void ConfigureUnitOfWork(IInMemoryReceiveEndpointConfigurator configurator)
+        {
+        }
+    }
+
+
     public abstract class Common_ConsumeContext_Outbox_Solo :
         InMemoryTestFixture
     {
@@ -120,23 +238,19 @@ namespace MassTransit.Containers.Tests.Common_Tests
         [Test]
         public async Task Should_provide_the_outbox_to_the_consumer()
         {
-            Task<ConsumeContext<Fault<PingMessage>>> fault = ConnectPublishHandler<Fault<PingMessage>>();
+            Task<ConsumeContext<Fault<PingMessage>>> fault = await ConnectPublishHandler<Fault<PingMessage>>();
 
             await InputQueueSendEndpoint.Send(new PingMessage());
 
             var consumeContext = await ConsumeContext;
 
-            Assert.That(
-                consumeContext.TryGetPayload(out InMemoryOutboxConsumeContext<PingMessage> outboxConsumeContext),
-                "Is ConsumerConsumeContext");
+            Assert.That(consumeContext.TryGetPayload(out InMemoryOutboxConsumeContext<PingMessage> _), "Is ConsumerConsumeContext");
 
             var publishEndpoint = await PublishEndpoint;
             var sendEndpointProvider = await SendEndpointProvider;
 
-            Assert.That(publishEndpoint, Is.TypeOf<InMemoryOutboxConsumeContext<PingMessage>>());
-            Assert.That(sendEndpointProvider, Is.TypeOf<InMemoryOutboxConsumeContext<PingMessage>>());
             Assert.That(ReferenceEquals(publishEndpoint, sendEndpointProvider), "ReferenceEquals(publishEndpoint, sendEndpointProvider)");
-            Assert.That(ReferenceEquals(outboxConsumeContext, sendEndpointProvider), "ReferenceEquals(outboxConsumeContext, sendEndpointProvider)");
+            Assert.That(ReferenceEquals(consumeContext, sendEndpointProvider), "ReferenceEquals(outboxConsumeContext, sendEndpointProvider)");
 
             await fault;
 
@@ -166,20 +280,43 @@ namespace MassTransit.Containers.Tests.Common_Tests
         class DependentConsumer :
             IConsumer<PingMessage>
         {
-            readonly TaskCompletionSource<ConsumeContext> _consumeContextTask;
+            readonly IAnotherService _anotherService;
             readonly IService _service;
 
-            public DependentConsumer(IService service, TaskCompletionSource<ConsumeContext> consumeContextTask)
+            public DependentConsumer(IService service, IAnotherService anotherService)
             {
                 _service = service;
-                _consumeContextTask = consumeContextTask;
+                _anotherService = anotherService;
             }
 
             public async Task Consume(ConsumeContext<PingMessage> context)
             {
-                _consumeContextTask.TrySetResult(context);
-
                 await _service.DoIt();
+
+                _anotherService.Done();
+
+                throw new IntentionalTestException();
+            }
+        }
+
+
+        class DependentBatchConsumer :
+            IConsumer<Batch<PingMessage>>
+        {
+            readonly IService _service;
+            readonly UnitOfWork _unitOfWork;
+
+            public DependentBatchConsumer(IService service, UnitOfWork unitOfWork)
+            {
+                _service = service;
+                _unitOfWork = unitOfWork;
+            }
+
+            public async Task Consume(ConsumeContext<Batch<PingMessage>> context)
+            {
+                await _service.DoIt();
+
+                _unitOfWork.Add();
 
                 throw new IntentionalTestException();
             }
@@ -191,13 +328,15 @@ namespace MassTransit.Containers.Tests.Common_Tests
         {
             readonly TaskCompletionSource<ConsumeContext> _consumeContextTask;
             readonly IPublishEndpoint _publishEndpoint;
+            readonly ConsumeContext _consumeContext;
 
-            public FlyingSoloConsumer(IPublishEndpoint publishEndpoint, ISendEndpointProvider sendEndpointProvider,
+            public FlyingSoloConsumer(IPublishEndpoint publishEndpoint, ISendEndpointProvider sendEndpointProvider, ConsumeContext consumeContext,
                 TaskCompletionSource<ConsumeContext> consumeContextTask,
                 TaskCompletionSource<IPublishEndpoint> publishEndpointTask,
                 TaskCompletionSource<ISendEndpointProvider> sendEndpointProviderTask)
             {
                 _publishEndpoint = publishEndpoint;
+                _consumeContext = consumeContext;
                 _consumeContextTask = consumeContextTask;
                 publishEndpointTask.TrySetResult(publishEndpoint);
                 sendEndpointProviderTask.TrySetResult(sendEndpointProvider);
@@ -205,23 +344,23 @@ namespace MassTransit.Containers.Tests.Common_Tests
 
             public async Task Consume(ConsumeContext<PingMessage> context)
             {
-                _consumeContextTask.TrySetResult(context);
-
                 await _publishEndpoint.Publish<ServiceDidIt>(new { });
+
+                _consumeContextTask.TrySetResult(_consumeContext);
 
                 throw new IntentionalTestException();
             }
         }
 
 
-        interface IService
+        public interface ServiceDidIt
         {
-            Task DoIt();
         }
 
 
-        public interface ServiceDidIt
+        interface IService
         {
+            Task DoIt();
         }
 
 
@@ -242,6 +381,49 @@ namespace MassTransit.Containers.Tests.Common_Tests
             public async Task DoIt()
             {
                 await _publishEndpoint.Publish<ServiceDidIt>(new { });
+            }
+        }
+
+
+        interface IAnotherService
+        {
+            void Done();
+        }
+
+
+        class AnotherService :
+            IAnotherService
+        {
+            readonly TaskCompletionSource<ConsumeContext> _consumeContextTask;
+            readonly ConsumeContext _context;
+
+            public AnotherService(ConsumeContext context, TaskCompletionSource<ConsumeContext> consumeContextTask)
+            {
+                _context = context;
+                _consumeContextTask = consumeContextTask;
+            }
+
+            public void Done()
+            {
+                _consumeContextTask.TrySetResult(_context);
+            }
+        }
+
+
+        public class UnitOfWork
+        {
+            readonly TaskCompletionSource<ConsumeContext> _consumeContextTask;
+            readonly ConsumeContext _context;
+
+            public UnitOfWork(ConsumeContext context, TaskCompletionSource<ConsumeContext> consumeContextTask)
+            {
+                _context = context;
+                _consumeContextTask = consumeContextTask;
+            }
+
+            public void Add()
+            {
+                _consumeContextTask.TrySetResult(_context);
             }
         }
     }

@@ -7,12 +7,8 @@
 
 
     public interface IReceiveEndpointCollection :
-        IReceiveObserverConnector,
         IReceiveEndpointObserverConnector,
         IConsumeMessageObserverConnector,
-        IConsumeObserverConnector,
-        IPublishObserverConnector,
-        ISendObserverConnector,
         IAgent,
         IProbeSite
     {
@@ -21,7 +17,7 @@
         /// </summary>
         /// <param name="endpointName"></param>
         /// <param name="endpoint"></param>
-        void Add(string endpointName, IReceiveEndpointControl endpoint);
+        void Add(string endpointName, ReceiveEndpoint endpoint);
 
         /// <summary>
         /// Start all endpoints in the collection which have not been started, and return the handles
@@ -38,5 +34,7 @@
         /// <param name="cancellationToken"></param>
         /// <returns></returns>
         HostReceiveEndpointHandle Start(string endpointName, CancellationToken cancellationToken = default);
+
+        HealthResult CheckHealth(BusState busState, string healthMessage);
     }
 }

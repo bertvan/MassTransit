@@ -13,7 +13,6 @@ module.exports = {
       ['meta', { name: "theme-color", content: "#ffffff"}],
     ],
   plugins: [
-    '@vuepress/active-header-links',
     '@vuepress/back-to-top',
     [
       '@vuepress/google-analytics', {
@@ -38,8 +37,26 @@ module.exports = {
         path: '/getting-started/',
         collapsable: false,
         children: [
-          '/getting-started/live-coding',
-          '/getting-started/upgrade-v6'
+          '/getting-started/upgrade-v6',
+          {
+            title: 'Release Notes',
+            path: '/releases/',
+            collapsable: true,
+            children: [
+              '/releases/v7.2.0',
+              '/releases/v7.1.8',
+              '/releases/v7.1.7',
+              '/releases/v7.1.6',
+              '/releases/v7.1.5',
+              '/releases/v7.1.4',
+              '/releases/v7.1.3',
+              '/releases/v7.1.1',
+              '/releases/v7.1.0',
+              '/releases/v7.0.7',
+              '/releases/v7.0.6',
+              '/releases/v7.0.4'
+            ]
+          }
         ]
       },
       {
@@ -57,6 +74,7 @@ module.exports = {
               '/usage/transports/azure-sb',
               '/usage/transports/activemq',
               '/usage/transports/amazonsqs',
+              '/usage/transports/grpc',
               '/usage/transports/in-memory'
             ]
           },
@@ -116,6 +134,7 @@ module.exports = {
             ]
           },
           ['/usage/testing', 'Testing'],
+          ['/usage/logging', 'Logging'],
           {
             title: 'Advanced',
             collapsable: true,
@@ -152,6 +171,7 @@ module.exports = {
                 collapsable: true,
                 children: [
                   '/advanced/middleware/receive',
+                  '/advanced/middleware/killswitch',
                   '/advanced/middleware/circuit-breaker',
                   '/advanced/middleware/rate-limiter',
                   '/advanced/middleware/transactions',
@@ -175,7 +195,7 @@ module.exports = {
                   '/advanced/monitoring/diagnostic-source',
                   '/advanced/monitoring/prometheus',
                   '/advanced/monitoring/applications-insights',
-                  '/advanced/monitoring/perfcounters',
+                  '/advanced/monitoring/perfcounters'
                 ]
               },
               '/advanced/connect-endpoint',
@@ -192,6 +212,7 @@ module.exports = {
                   '/advanced/topology/conventions',
                   '/advanced/topology/rabbitmq',
                   '/advanced/topology/servicebus',
+                  '/advanced/topology/deploy'
                 ]
               },
               {
@@ -223,9 +244,11 @@ module.exports = {
           '/learn/analyzers',
           '/learn/samples',
           '/learn/videos',
-          '/learn/courses',
+          '/learn/training',
+          '/learn/support',
           '/learn/loving-the-community',
-          '/learn/contributing'
+          '/learn/contributing',
+          '/getting-started/live-coding'
         ]
       },
       {
@@ -233,7 +256,9 @@ module.exports = {
         collapsable: true,
         children: [
           '/articles/mediator',
-          '/articles/outbox'
+          '/articles/outbox',
+          '/articles/durable-futures',
+          '/articles/net5'
         ]
       },
       {

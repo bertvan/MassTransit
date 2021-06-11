@@ -10,23 +10,24 @@
 
     [TestFixture]
     public class Stopping_the_bus :
-        AsyncTestFixture
+        BusTestFixture
     {
         [Test]
+        [Category("Flaky")]
         public async Task Should_complete_running_consumers_nicely()
         {
             TaskCompletionSource<PingMessage> consumerStarted = GetTask<PingMessage>();
 
-            var bus = Bus.Factory.CreateUsingRabbitMq(x =>
+            var bus = MassTransit.Bus.Factory.CreateUsingRabbitMq(x =>
             {
                 x.Host("localhost", "test", h =>
                 {
                 });
 
+                ConfigureBusDiagnostics(x);
+
                 x.ReceiveEndpoint("input_queue", e =>
                 {
-                    e.PurgeOnStartup = true;
-
                     e.Handler<PingMessage>(async context =>
                     {
                         await Console.Out.WriteLineAsync("Starting handler");
@@ -76,18 +77,19 @@
         }
 
         [Test]
+        [Category("Flaky")]
         public async Task Should_complete_with_nothing_running()
         {
-            var bus = Bus.Factory.CreateUsingRabbitMq(x =>
+            var bus = MassTransit.Bus.Factory.CreateUsingRabbitMq(x =>
             {
                 x.Host("localhost", "test", h =>
                 {
                 });
 
+                ConfigureBusDiagnostics(x);
+
                 x.ReceiveEndpoint("input_queue", e =>
                 {
-                    e.PurgeOnStartup = true;
-
                     e.Handler<PingMessage>(async context =>
                     {
                         await Console.Out.WriteLineAsync("Starting handler");

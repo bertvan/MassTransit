@@ -4,6 +4,7 @@ namespace MassTransit.ConsumeConnectors
     using System.Threading.Tasks;
     using ConsumerSpecifications;
     using GreenPipes;
+    using Internals.Extensions;
     using Pipeline;
     using Pipeline.ConsumerFactories;
     using Pipeline.Filters;
@@ -36,20 +37,40 @@ namespace MassTransit.ConsumeConnectors
 
             IPipe<ConsumerConsumeContext<TConsumer, Batch<TMessage>>> batchConsumerPipe = batchMessageSpecification.Build(consumeFilter);
 
-            var factory = new BatchConsumerFactory<TConsumer, TMessage>(consumerFactory, messageLimit, concurrencyLimit, timeLimit, batchConsumerPipe);
+            IPipe<ConsumeContext<Batch<TMessage>>> batchMessagePipe = batchMessageSpecification.BuildMessagePipe(x =>
+            {
+                x.UseFilter(new ConsumerMessageFilter<TConsumer, Batch<TMessage>>(consumerFactory, batchConsumerPipe));
+            });
 
-            IConsumerSpecification<IConsumer<TMessage>> messageConsumerSpecification =
-                ConsumerConnectorCache<IConsumer<TMessage>>.Connector.CreateConsumerSpecification<IConsumer<TMessage>>();
+            IBatchCollector<TMessage> collector = null;
+            if (options.GroupKeyProvider == null)
+                collector = new BatchCollector<TMessage>(messageLimit, timeLimit, concurrencyLimit, batchMessagePipe);
+            else
+            {
+                if (options.GroupKeyProvider.GetType().ClosesType(typeof(IGroupKeyProvider<,>), out Type[] types))
+                {
+                    var collectorType = typeof(BatchCollector<,>).MakeGenericType(typeof(TMessage), types[1]);
+                    collector = (IBatchCollector<TMessage>)Activator.CreateInstance(collectorType,
+                        messageLimit, timeLimit, concurrencyLimit, batchMessagePipe, options.GroupKeyProvider);
+                }
+                else
+                    throw new ConfigurationException("The GroupKeyProvider does not implement IGroupKeyProvider<TMessage,TKey>");
+            }
 
-            IConsumerMessageSpecification<IConsumer<TMessage>, TMessage> messageSpecification =
+            var factory = new BatchConsumerFactory<TMessage>(messageLimit, timeLimit, collector);
+
+            IConsumerSpecification<BatchConsumer<TMessage>> messageConsumerSpecification =
+                ConsumerConnectorCache<BatchConsumer<TMessage>>.Connector.CreateConsumerSpecification<BatchConsumer<TMessage>>();
+
+            IConsumerMessageSpecification<BatchConsumer<TMessage>, TMessage> messageSpecification =
                 messageConsumerSpecification.GetMessageSpecification<TMessage>();
 
-            IPipe<ConsumerConsumeContext<IConsumer<TMessage>, TMessage>> consumerPipe =
-                messageSpecification.Build(new MethodConsumerMessageFilter<IConsumer<TMessage>, TMessage>());
+            IPipe<ConsumerConsumeContext<BatchConsumer<TMessage>, TMessage>> consumerPipe =
+                messageSpecification.Build(new MethodConsumerMessageFilter<BatchConsumer<TMessage>, TMessage>());
 
             IPipe<ConsumeContext<TMessage>> messagePipe = messageSpecification.BuildMessagePipe(x =>
             {
-                x.UseFilter(new ConsumerMessageFilter<IConsumer<TMessage>, TMessage>(factory, consumerPipe));
+                x.UseFilter(new ConsumerMessageFilter<BatchConsumer<TMessage>, TMessage>(factory, consumerPipe));
             });
 
             var handle = consumePipe.ConnectConsumePipe(messagePipe);
@@ -61,10 +82,10 @@ namespace MassTransit.ConsumeConnectors
         class BatchConnectHandle :
             ConnectHandle
         {
-            readonly BatchConsumerFactory<TConsumer, TMessage> _factory;
+            readonly BatchConsumerFactory<TMessage> _factory;
             readonly ConnectHandle _handle;
 
-            public BatchConnectHandle(ConnectHandle handle, BatchConsumerFactory<TConsumer, TMessage> factory)
+            public BatchConnectHandle(ConnectHandle handle, BatchConsumerFactory<TMessage> factory)
             {
                 _handle = handle;
                 _factory = factory;

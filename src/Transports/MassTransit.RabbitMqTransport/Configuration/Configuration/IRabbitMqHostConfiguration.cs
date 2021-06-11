@@ -1,7 +1,6 @@
 namespace MassTransit.RabbitMqTransport.Configuration
 {
     using System;
-    using GreenPipes;
     using Integration;
     using MassTransit.Configuration;
     using Topology;
@@ -22,7 +21,6 @@ namespace MassTransit.RabbitMqTransport.Configuration
         bool PublisherConfirmation { get; }
 
         BatchSettings BatchSettings { get; }
-        IRetryPolicy ConnectionRetryPolicy { get; }
 
         new IRabbitMqHostTopology HostTopology { get; }
 
@@ -38,9 +36,5 @@ namespace MassTransit.RabbitMqTransport.Configuration
 
         IRabbitMqReceiveEndpointConfiguration CreateReceiveEndpointConfiguration(RabbitMqReceiveSettings settings,
             IRabbitMqEndpointConfiguration endpointConfiguration, Action<IRabbitMqReceiveEndpointConfigurator> configure = null);
-
-        ISendTransportProvider CreateSendTransportProvider(IModelContextSupervisor modelContextSupervisor);
-        IPublishTransportProvider CreatePublishTransportProvider(IModelContextSupervisor modelContextSupervisor);
-        IModelContextSupervisor CreateModelContextSupervisor();
     }
 }

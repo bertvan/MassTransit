@@ -3,6 +3,7 @@ namespace MassTransit.Azure.ServiceBus.Core.Builders
     using Configuration;
     using Contexts;
     using MassTransit.Builders;
+    using Pipeline;
     using Topology;
     using Topology.Builders;
     using Transport;
@@ -25,11 +26,7 @@ namespace MassTransit.Azure.ServiceBus.Core.Builders
         {
             var topologyLayout = BuildTopology(_configuration.Settings);
 
-            var context = new ServiceBusEntityReceiveEndpointContext(_hostConfiguration, _configuration, topologyLayout);
-
-            context.GetOrAddPayload(() => _hostConfiguration.HostTopology);
-
-            return context;
+            return new ServiceBusEntityReceiveEndpointContext(_hostConfiguration, _configuration, topologyLayout, ClientContextFactory);
         }
 
         static BrokerTopology BuildTopology(SubscriptionSettings settings)
@@ -41,6 +38,12 @@ namespace MassTransit.Azure.ServiceBus.Core.Builders
             topologyBuilder.CreateSubscription(topologyBuilder.Topic, settings.SubscriptionDescription, settings.Rule, settings.Filter);
 
             return topologyBuilder.BuildBrokerTopology();
+        }
+
+        IClientContextSupervisor ClientContextFactory()
+        {
+            return _hostConfiguration.ConnectionContextSupervisor
+                .CreateClientContextSupervisor(supervisor => new SubscriptionClientContextFactory(supervisor, _configuration.Settings));
         }
     }
 }

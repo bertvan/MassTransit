@@ -45,11 +45,11 @@ Send the message to the _order-events-listener_ exchange. If the exchange does n
 
 `queue:order-events-listener`
 
-Send the message to the _order-events-listener_ exchange. If the exchange or queue does not exist, they will created and the exchange will be bound to the queue.
+Send the message to the _order-events-listener_ exchange. If the exchange or queue does not exist, they will be created and the exchange will be bound to the queue.
 
 With either address, RabbitMQ will route the message from the _order-events-listener_ exchange to the _order-events-listener_ queue.
 
-When a message is published, the message is sent to the _OrderSystem.Events:OrderSubmitted_ exchange. If the exchange does not exist, it will created. RabbitMQ will route the message from the _OrderSystem.Events:OrderSubmitted_ exchange to the _order-events-listener_ exchange, and subsequently to the _order-events-listener_ queue. If other receive endpoints connected to the same virtual host include consumers that consume the _OrderSubmitted_ message, a copy of the message would be routed to each of those endpoints as well.
+When a message is published, the message is sent to the _OrderSystem.Events:OrderSubmitted_ exchange. If the exchange does not exist, it will be created. RabbitMQ will route the message from the _OrderSystem.Events:OrderSubmitted_ exchange to the _order-events-listener_ exchange, and subsequently to the _order-events-listener_ queue. If other receive endpoints connected to the same virtual host include consumers that consume the _OrderSubmitted_ message, a copy of the message would be routed to each of those endpoints as well.
 
 ::: warning
 If a message is published before starting the bus, so that MassTransit can create the exchanges and queues, the exchange _OrderSystem.Events:OrderSubmitted_ will be created. However, until the bus has been started at least once, there won't be a queue bound to the exchange and any published messages will be lost. Once the bus has been started, the queue will remain bound to the exchange even when the bus is stopped.
@@ -99,6 +99,12 @@ MassTransit can be used with CloudAMQP, which is a great SaaS-based solution to 
 
 <<< @/docs/code/transports/CloudAmqpConsoleListener.cs
 
+## AmazonMQ - RabbitMQ
+
+AmazonMQ now includes [RabbitMQ support](https://us-east-2.console.aws.amazon.com/amazon-mq/home), which means the best message broker can now be used easily on AWS. To configure MassTransit, the AMQPS endpoint address can be used to configure the host as shown below. 
+
+<<< @/docs/code/transports/AmazonRabbitMqConsoleListener.cs
+
 ## Guidance
 
 The following recommendations should be considered _best practices_ for building applications using MassTransit, specifically with RabbitMQ.
@@ -113,5 +119,5 @@ The following recommendations should be considered _best practices_ for building
   - Messages from the queue will be load balanced across all instances (the _competing consumer_ pattern)
 - If a consumer exception is thrown, the faulted message will be moved to an error queue, which is named with the \_error suffix.
 - The number of concurrently processed messages can be up to the _PrefetchCount_, depending upon the number of cores available.
-- For temporary receive endpoints, set _AutoDelete = true_ and _Durable = false_
+- For temporary receive endpoints that should be deleted when the bus is stopped, use _TemporaryEndpointDefinition_ as the receive endpoint definition.
 - To configure _PrefetchCount_ higher than the desired concurrent message count, add _UseConcurrencyLimit(n)_ to the configuration. _This must be added before any consumers are configured._ Depending upon your consumer duration, higher values may greatly improve overall message throughput.

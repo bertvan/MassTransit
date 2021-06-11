@@ -21,6 +21,8 @@ namespace MassTransit.JobService
             SlotWaitTime = TimeSpan.FromSeconds(30);
             StartJobTimeout = TimeSpan.Zero;
             SlotRequestTimeout = TimeSpan.Zero;
+            HeartbeatInterval = TimeSpan.FromMinutes(1);
+            HeartbeatTimeout = TimeSpan.FromMinutes(5);
         }
 
         public string JobTypeSagaEndpointName
@@ -56,17 +58,17 @@ namespace MassTransit.JobService
         /// <summary>
         /// The endpoint for the JobAttemptStateMachine
         /// </summary>
-        public Uri JobSagaEndpointAddress { get; private set; }
+        public Uri JobSagaEndpointAddress { get; set; }
 
         /// <summary>
         /// The endpoint for the JobAttemptStateMachine
         /// </summary>
-        public Uri JobTypeSagaEndpointAddress { get; private set; }
+        public Uri JobTypeSagaEndpointAddress { get; set; }
 
         /// <summary>
         /// The endpoint for the JobAttemptStateMachine
         /// </summary>
-        public Uri JobAttemptSagaEndpointAddress { get; private set; }
+        public Uri JobAttemptSagaEndpointAddress { get; set; }
 
         /// <summary>
         /// The job service for the endpoint
@@ -94,6 +96,26 @@ namespace MassTransit.JobService
         public TimeSpan StatusCheckInterval { get; set; }
 
         /// <summary>
+        /// How often a job instance should send a heartbeat
+        /// </summary>
+        public TimeSpan HeartbeatInterval { get; set; }
+
+        /// <summary>
+        /// The time after which an instance will automatically be purged from the instance list
+        /// </summary>
+        public TimeSpan HeartbeatTimeout { get; set; }
+
+        /// <summary>
+        /// The number of times to retry a suspect job before it is faulted. Defaults to zero.
+        /// </summary>
+        public int SuspectJobRetryCount { get; set; }
+
+        /// <summary>
+        /// The delay before retrying a suspect job
+        /// </summary>
+        public TimeSpan? SuspectJobRetryDelay { get; set; }
+
+        /// <summary>
         /// If specified, overrides the default saga partition count to reduce conflicts when using optimistic concurrency.
         /// If using a saga repository with pessimistic concurrency, this is not recommended.
         /// </summary>
@@ -103,6 +125,8 @@ namespace MassTransit.JobService
         /// If true, completed jobs will be finalized, removing the saga from the repository
         /// </summary>
         public bool FinalizeCompleted { get; set; }
+
+        internal IReceiveEndpointConfigurator InstanceEndpointConfigurator { get; set; }
 
         IEnumerable<ValidationResult> ISpecification.Validate()
         {
@@ -117,23 +141,6 @@ namespace MassTransit.JobService
                 yield return this.Failure(nameof(JobStateSagaEndpointName), "must not be null or empty");
             if (string.IsNullOrWhiteSpace(JobAttemptSagaEndpointName))
                 yield return this.Failure(nameof(JobAttemptSagaEndpointName), "must not be null or empty");
-        }
-
-        public void Set(JobServiceOptions options)
-        {
-            JobService = options.JobService;
-            SlotRequestTimeout = options.SlotRequestTimeout;
-            SlotWaitTime = options.SlotWaitTime;
-            StartJobTimeout = options.StartJobTimeout;
-            StatusCheckInterval = options.StatusCheckInterval;
-
-            JobSagaEndpointAddress = options.JobSagaEndpointAddress;
-            JobAttemptSagaEndpointAddress = options.JobAttemptSagaEndpointAddress;
-            JobTypeSagaEndpointAddress = options.JobTypeSagaEndpointAddress;
-
-            _jobAttemptSagaEndpointName = options._jobAttemptSagaEndpointName;
-            _jobSagaEndpointName = options._jobSagaEndpointName;
-            _jobTypeSagaEndpointName = options._jobTypeSagaEndpointName;
         }
     }
 }

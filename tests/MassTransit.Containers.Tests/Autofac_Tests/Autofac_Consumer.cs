@@ -45,6 +45,53 @@ namespace MassTransit.Containers.Tests.Autofac_Tests
 
 
     [TestFixture]
+    public class Autofac_Consumer_Retry :
+        Common_Consumer_Retry
+    {
+        readonly IContainer _container;
+
+        public Autofac_Consumer_Retry()
+        {
+            var builder = new ContainerBuilder();
+            builder.AddMassTransit(ConfigureRegistration);
+
+            _container = builder.Build();
+        }
+
+        protected override void ConfigureInMemoryReceiveEndpoint(IInMemoryReceiveEndpointConfigurator configurator)
+        {
+            configurator.UseMessageRetry(r => r.Immediate(5));
+            configurator.UseMessageLifetimeScope(_container);
+            configurator.UseInMemoryOutbox();
+
+            base.ConfigureInMemoryReceiveEndpoint(configurator);
+        }
+
+        protected override IBusRegistrationContext Registration => _container.Resolve<IBusRegistrationContext>();
+    }
+
+
+    [TestFixture]
+    public class Autofac_Consumer_ConfigureEndpoint :
+        Common_Consumer_ConfigureEndpoint
+    {
+        readonly IContainer _container;
+
+        public Autofac_Consumer_ConfigureEndpoint()
+        {
+            var builder = new ContainerBuilder();
+            builder.AddMassTransit(ConfigureRegistration);
+
+            builder.RegisterType<DoNotPublishFaults>().As<IConfigureReceiveEndpoint>();
+
+            _container = builder.Build();
+        }
+
+        protected override IBusRegistrationContext Registration => _container.Resolve<IBusRegistrationContext>();
+    }
+
+
+    [TestFixture]
     public class Autofac_Consumer_Endpoint :
         Common_Consumer_Endpoint
     {
@@ -113,7 +160,6 @@ namespace MassTransit.Containers.Tests.Autofac_Tests
         {
             var builder = new ContainerBuilder();
             builder.Register(_ => new MyId(Guid.NewGuid())).InstancePerLifetimeScope();
-            builder.RegisterGeneric(typeof(ScopedFilter<>)).InstancePerLifetimeScope();
             builder.RegisterInstance(TaskCompletionSource);
             builder.AddMassTransit(ConfigureRegistration);
             _container = builder.Build();
@@ -165,6 +211,31 @@ namespace MassTransit.Containers.Tests.Autofac_Tests
 
 
     [TestFixture]
+    public class Autofac_Consumer_Connect :
+        Common_Consumer_Connect
+    {
+        readonly IContainer _container;
+
+        public Autofac_Consumer_Connect()
+        {
+            var builder = new ContainerBuilder();
+            builder.RegisterInstance(MessageCompletion);
+            builder.AddMassTransit(ConfigureRegistration);
+
+            _container = builder.Build();
+        }
+
+        [OneTimeTearDown]
+        public async Task Close_container()
+        {
+            await _container.DisposeAsync();
+        }
+
+        protected override IReceiveEndpointConnector Connector => _container.Resolve<IReceiveEndpointConnector>();
+    }
+
+
+    [TestFixture]
     public class Autofac_Consumer_FilterOrder :
         Common_Consumer_FilterOrder
     {
@@ -206,6 +277,64 @@ namespace MassTransit.Containers.Tests.Autofac_Tests
         protected override IFilter<ConsumeContext<EasyMessage>> CreateMessageFilter()
         {
             return _container.Resolve<IFilter<ConsumeContext<EasyMessage>>>();
+        }
+    }
+
+
+    [TestFixture]
+    public class Autofac_Consumer_ScopedFilterOrder :
+        Common_Consumer_ScopedFilterOrder<ILifetimeScope>
+    {
+        readonly IContainer _container;
+
+        public Autofac_Consumer_ScopedFilterOrder()
+        {
+            var builder = new ContainerBuilder();
+            builder.RegisterInstance(MessageCompletion);
+            builder.AddMassTransit(ConfigureRegistration);
+
+            _container = builder.Build();
+        }
+
+        [OneTimeTearDown]
+        public async Task Close_container()
+        {
+            await _container.DisposeAsync();
+        }
+
+        protected override void ConfigureInMemoryReceiveEndpoint(IInMemoryReceiveEndpointConfigurator configurator)
+        {
+            base.ConfigureInMemoryReceiveEndpoint(configurator);
+            AutofacFilterExtensions.UseConsumeFilter(configurator, typeof(MessageFilter<>), Registration);
+        }
+
+        protected override IBusRegistrationContext Registration => _container.Resolve<IBusRegistrationContext>();
+
+
+        class MessageFilter<TMessage> :
+            IFilter<ConsumeContext<TMessage>>
+            where TMessage : class
+        {
+            readonly TaskCompletionSource<ConsumeContext<TMessage>> _taskCompletionSource;
+
+            public MessageFilter(TaskCompletionSource<ConsumeContext<TMessage>> taskCompletionSource)
+            {
+                _taskCompletionSource = taskCompletionSource;
+            }
+
+            public Task Send(ConsumeContext<TMessage> context, IPipe<ConsumeContext<TMessage>> next)
+            {
+                if (context.TryGetPayload(out ILifetimeScope _))
+                    _taskCompletionSource.TrySetResult(context);
+                else
+                    _taskCompletionSource.TrySetException(new PayloadException("Service Provider not found"));
+
+                return next.Send(context);
+            }
+
+            public void Probe(ProbeContext context)
+            {
+            }
         }
     }
 }

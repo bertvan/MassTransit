@@ -1,6 +1,7 @@
 ﻿namespace MassTransit.Tests
 {
     using System;
+    using System.Collections.Generic;
     using System.Threading;
     using System.Threading.Tasks;
     using NUnit.Framework;
@@ -64,31 +65,24 @@
 
 
     [TestFixture]
+    [Explicit]
     public class Sending_a_request_to_a_missing_service_that_times_out :
         InMemoryTestFixture
     {
         [Test]
-        public async Task Should_timeout()
+        public async Task Should_timeout_without_exceptions()
         {
+            List<object> unhandledExceptions = new List<object>();
+            List<Exception> unobservedTaskExceptions = new List<Exception>();
+
             AppDomain.CurrentDomain.UnhandledException += (sender, eventArgs) =>
             {
-                Console.WriteLine(eventArgs.ExceptionObject);
+                unhandledExceptions.Add(eventArgs.ExceptionObject);
             };
 
             TaskScheduler.UnobservedTaskException += (sender, eventArgs) =>
             {
-                try
-                {
-                    Console.ForegroundColor = ConsoleColor.DarkRed;
-                    Console.Write("UnobservedTaskException: ");
-                    eventArgs.SetObserved();
-                }
-                finally
-                {
-                    Console.ResetColor();
-                }
-
-                Console.WriteLine(eventArgs.Exception);
+                unobservedTaskExceptions.Add(eventArgs.Exception);
             };
 
             Assert.That(async () => await _response, Throws.TypeOf<RequestTimeoutException>());
@@ -97,6 +91,9 @@
             await Task.Delay(1000);
             GC.WaitForPendingFinalizers();
             GC.Collect();
+
+            Assert.That(unhandledExceptions, Is.Empty);
+            Assert.That(unobservedTaskExceptions, Is.Empty);
         }
 
         Task<Response<PongMessage>> _response;

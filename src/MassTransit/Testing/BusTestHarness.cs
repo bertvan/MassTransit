@@ -15,17 +15,10 @@
     public abstract class BusTestHarness :
         AsyncTestHarness
     {
-        ConnectHandle _busConsumeObserver;
         BusHandle _busHandle;
-        ConnectHandle _busPublishObserver;
-        ConnectHandle _busReceiveObserver;
-        ConnectHandle _busSendObserver;
         BusTestConsumeObserver _consumed;
-        ConnectHandle _inputQueueSendObserver;
         BusTestPublishObserver _published;
         BusTestReceiveObserver _received;
-        ConnectHandle _receiveEndpointObserver;
-        ConnectHandle _receiveInactivityHandle;
         BusTestSendObserver _sent;
 
         public IBus Bus => BusControl;
@@ -76,7 +69,7 @@
 
         protected virtual void ConnectObservers(IBus bus)
         {
-            _receiveEndpointObserver = bus.ConnectReceiveEndpointObserver(new TestReceiveEndpointObserver(_published));
+            bus.ConnectReceiveEndpointObserver(new TestReceiveEndpointObserver(_published));
 
             OnConnectObservers?.Invoke(bus);
         }
@@ -98,12 +91,20 @@
 
         public virtual async Task Start(CancellationToken cancellationToken = default)
         {
+            if(!cancellationToken.CanBeCanceled)
+                cancellationToken = TestCancellationToken;
+
             _received = new BusTestReceiveObserver(TestInactivityTimeout);
-            _receiveInactivityHandle = _received.ConnectInactivityObserver(InactivityObserver);
+            _received.ConnectInactivityObserver(InactivityObserver);
 
             _consumed = new BusTestConsumeObserver(TestTimeout, InactivityToken);
-            _published = new BusTestPublishObserver(TestTimeout, InactivityToken);
-            _sent = new BusTestSendObserver(TestTimeout, InactivityToken);
+            _consumed.ConnectInactivityObserver(InactivityObserver);
+
+            _published = new BusTestPublishObserver(TestTimeout, TestInactivityTimeout, InactivityToken);
+            _published.ConnectInactivityObserver(InactivityObserver);
+
+            _sent = new BusTestSendObserver(TestTimeout, TestInactivityTimeout, InactivityToken);
+            _sent.ConnectInactivityObserver(InactivityObserver);
 
             PreCreateBus?.Invoke(this);
 
@@ -117,36 +118,18 @@
 
             InputQueueSendEndpoint = await GetSendEndpoint(InputQueueAddress).ConfigureAwait(false);
 
-            _inputQueueSendObserver = InputQueueSendEndpoint.ConnectSendObserver(_sent);
+            InputQueueSendEndpoint.ConnectSendObserver(_sent);
 
-            _busConsumeObserver = BusControl.ConnectConsumeObserver(_consumed);
-            _busPublishObserver = BusControl.ConnectPublishObserver(_published);
-            _busReceiveObserver = BusControl.ConnectReceiveObserver(_received);
-            _busSendObserver = BusControl.ConnectSendObserver(_sent);
+            BusControl.ConnectConsumeObserver(_consumed);
+            BusControl.ConnectPublishObserver(_published);
+            BusControl.ConnectReceiveObserver(_received);
+            BusControl.ConnectSendObserver(_sent);
         }
 
         public virtual async Task Stop()
         {
             try
             {
-                _receiveEndpointObserver?.Disconnect();
-                _receiveEndpointObserver = null;
-
-                _busSendObserver?.Disconnect();
-                _busSendObserver = null;
-
-                _inputQueueSendObserver?.Disconnect();
-                _inputQueueSendObserver = null;
-
-                _busPublishObserver?.Disconnect();
-                _busPublishObserver = null;
-
-                _busConsumeObserver?.Disconnect();
-                _busConsumeObserver = null;
-
-                _busReceiveObserver?.Disconnect();
-                _receiveInactivityHandle?.Disconnect();
-
                 if (_busHandle != null)
                 {
                     using var tokenSource = new CancellationTokenSource(TestTimeout);
@@ -185,16 +168,16 @@
             ConnectHandle handler = null;
             handler = Bus.ConnectHandler<T>(async context =>
             {
-                source.SetResult(context);
-
                 handler.Disconnect();
+
+                source.SetResult(context);
             });
 
             TestCancelledTask.ContinueWith(x =>
             {
-                source.TrySetCanceled();
-
                 handler.Disconnect();
+
+                source.TrySetCanceled();
             }, TaskContinuationOptions.OnlyOnCanceled);
 
             return source.Task;
@@ -217,17 +200,17 @@
             {
                 if (filter(context))
                 {
-                    source.SetResult(context);
-
                     handler.Disconnect();
+
+                    source.SetResult(context);
                 }
             });
 
             TestCancelledTask.ContinueWith(x =>
             {
-                source.TrySetCanceled();
-
                 handler.Disconnect();
+
+                source.TrySetCanceled();
             }, TaskContinuationOptions.OnlyOnCanceled);
 
             return source.Task;

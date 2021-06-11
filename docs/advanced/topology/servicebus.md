@@ -58,7 +58,7 @@ Bus.Factory.CreateUsingAzureServiceBus(cfg =>
 {
     cfg.Send<UpdateUserStatus>(x =>
     {
-        x.UsePartitionKeyFormatter(context => context.Message.UserId);
+        x.UseSessionIdFormatter(context => context.Message.UserId);
     });
 });
 ```
@@ -95,3 +95,10 @@ cfg.ReceiveEndpoint("input-queue", e =>
     });
 })
 ```
+
+### Broker Topology
+
+The topics, queues, and subscriptions configured on Azure Service Bus are shown below.
+
+![azure-topology](/azure-topology.png)
+

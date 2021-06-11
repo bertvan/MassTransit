@@ -2,6 +2,7 @@
 {
     using System;
     using System.Threading.Tasks;
+    using Context;
     using Pipeline;
     using Pipeline.Observables;
     using Transports;
@@ -19,6 +20,12 @@
 
         bool ConfigureConsumeTopology { get; }
 
+        bool PublishFaults { get; }
+
+        int PrefetchCount { get; }
+
+        int? ConcurrentMessageLimit { get; }
+
         ReceiveEndpointObservable EndpointObservers { get; }
         ReceiveObservable ReceiveObservers { get; }
         ReceiveTransportObservable TransportObservers { get; }
@@ -34,5 +41,7 @@
         /// </summary>
         /// <returns></returns>
         IReceivePipe CreateReceivePipe();
+
+        ReceiveEndpointContext CreateReceiveEndpointContext();
     }
 }

@@ -1,7 +1,6 @@
 namespace MassTransit.ActiveMqTransport.Tests
 {
     using System;
-    using System.Collections.Generic;
     using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
@@ -225,19 +224,11 @@ namespace MassTransit.ActiveMqTransport.Tests
         }
 
         [Test]
-        [Category("SlowAF")]
+        [Category("Flaky")]
         public async Task Should_do_a_bunch_of_requests_and_responses()
         {
             var bus = Bus.Factory.CreateUsingActiveMq(sbc =>
             {
-                sbc.Host(TestBrokerHost, 61617, h =>
-                {
-                    h.Username(TestUsername);
-                    h.Password(TestPassword);
-
-                    h.UseSsl();
-                });
-
                 sbc.ReceiveEndpoint("test", e =>
                 {
                     e.Handler<PingMessage>(async context => await context.RespondAsync(new PongMessage(context.Message.CorrelationId)));
@@ -259,49 +250,7 @@ namespace MassTransit.ActiveMqTransport.Tests
         }
 
         [Test]
-        [Category("SlowAF")]
-        public async Task Should_do_a_bunch_of_requests_and_responses_on_failover_transport()
-        {
-            if (FailoverHosts.Length == 0)
-            {
-                // Ignoring this test if there are no failovers
-                return;
-            }
-
-            var bus = Bus.Factory.CreateUsingActiveMq(sbc =>
-            {
-                sbc.Host("activemq-cluster", 61617, h =>
-                {
-                    h.Username(TestUsername);
-                    h.Password(TestPassword);
-                    h.FailoverHosts(FailoverHosts);
-                    h.TransportOptions(new Dictionary<string, string> {{"transport.randomize", "true"}});
-
-                    h.UseSsl();
-                });
-
-                sbc.ReceiveEndpoint("test", e =>
-                {
-                    e.Handler<PingMessage>(async context => await context.RespondAsync(new PongMessage(context.Message.CorrelationId)));
-                });
-            });
-
-            await bus.StartAsync();
-            try
-            {
-                for (var i = 0; i < 100; i += 1)
-                {
-                    Response<PongMessage> result = await bus.Request<PingMessage, PongMessage>(new PingMessage());
-                }
-            }
-            finally
-            {
-                await bus.StopAsync();
-            }
-        }
-
-        [Test]
-        [Category("SlowAF")]
+        [Category("Flaky")]
         public async Task Should_succeed_and_connect_when_properly_configured()
         {
             TaskCompletionSource<bool> received = TaskUtil.GetTask<bool>();
@@ -310,14 +259,6 @@ namespace MassTransit.ActiveMqTransport.Tests
 
             var busControl = Bus.Factory.CreateUsingActiveMq(cfg =>
             {
-                cfg.Host(TestBrokerHost, 61617, h =>
-                {
-                    h.Username(TestUsername);
-                    h.Password(TestPassword);
-
-                    h.UseSsl();
-                });
-
                 cfg.ReceiveEndpoint("input-queue", x =>
                 {
                     x.Handler<PingMessage>(async context =>
@@ -347,27 +288,5 @@ namespace MassTransit.ActiveMqTransport.Tests
 
             await busControl.StopAsync();
         }
-
-        [Test]
-        [Category("SlowAF")]
-        public void Should_succeed_when_properly_configured()
-        {
-            var busControl = Bus.Factory.CreateUsingActiveMq(cfg =>
-            {
-                cfg.Host(TestBrokerHost, 61617, h =>
-                {
-                    h.Username(TestUsername);
-                    h.Password(TestPassword);
-
-                    h.UseSsl();
-                });
-            });
-        }
-
-        const string TestBrokerHost = "b-15a8b984-a883-4143-a4e7-8f97bc5db37d-1.mq.us-east-2.amazonaws.com";
-        const string TestUsername = "masstransit-build";
-        const string TestPassword = "build-Br0k3r";
-
-        readonly string[] FailoverHosts = { };
     }
 }

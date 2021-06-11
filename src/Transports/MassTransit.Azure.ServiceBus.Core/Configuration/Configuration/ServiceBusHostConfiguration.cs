@@ -18,14 +18,15 @@
     using Topology.Topologies;
     using Transport;
     using Transports;
+    using Util;
 
 
     public class ServiceBusHostConfiguration :
-        BaseHostConfiguration<IServiceBusEntityEndpointConfiguration>,
+        BaseHostConfiguration<IServiceBusEntityEndpointConfiguration, IServiceBusReceiveEndpointConfigurator>,
         IServiceBusHostConfiguration
     {
         readonly IServiceBusBusConfiguration _busConfiguration;
-        readonly ServiceBusConnectionContextSupervisor _connectionContextSupervisor;
+        readonly Recycle<IConnectionContextSupervisor> _connectionContext;
         readonly IServiceBusHostTopology _hostTopology;
         readonly IServiceBusTopologyConfiguration _topologyConfiguration;
         ServiceBusHostSettings _hostSettings;
@@ -40,14 +41,29 @@
             _hostSettings = new HostSettings();
             _hostTopology = new ServiceBusHostTopology(this, _topologyConfiguration);
 
-            _connectionContextSupervisor = new ServiceBusConnectionContextSupervisor(this, topologyConfiguration);
+            ReceiveTransportRetryPolicy = Retry.CreatePolicy(x =>
+            {
+                x.Ignore<MessagingEntityNotFoundException>();
+                x.Ignore<MessagingEntityAlreadyExistsException>();
+                x.Ignore<MessageNotFoundException>();
+                x.Ignore<MessageSizeExceededException>();
+
+                x.Ignore<UnauthorizedException>();
+
+                x.Handle<ServerBusyException>(exception => exception.IsTransient);
+                x.Handle<TimeoutException>();
+
+                x.Interval(5, TimeSpan.FromSeconds(10));
+            });
+
+            _connectionContext = new Recycle<IConnectionContextSupervisor>(() => new ConnectionContextSupervisor(this, topologyConfiguration));
         }
 
         public override Uri HostAddress => _hostSettings.ServiceUri;
 
         string IServiceBusHostConfiguration.BasePath => _hostSettings.ServiceUri.AbsolutePath.Trim('/');
 
-        public IConnectionContextSupervisor ConnectionContextSupervisor => _connectionContextSupervisor;
+        public IConnectionContextSupervisor ConnectionContextSupervisor => _connectionContext.Supervisor;
 
         public ServiceBusHostSettings Settings
         {
@@ -61,26 +77,7 @@
             }
         }
 
-        public IRetryPolicy RetryPolicy
-        {
-            get
-            {
-                return Retry.CreatePolicy(x =>
-                {
-                    x.Ignore<MessagingEntityNotFoundException>();
-                    x.Ignore<MessagingEntityAlreadyExistsException>();
-                    x.Ignore<MessageNotFoundException>();
-                    x.Ignore<MessageSizeExceededException>();
-
-                    x.Ignore<UnauthorizedException>();
-
-                    x.Handle<ServerBusyException>(exception => exception.IsTransient);
-                    x.Handle<TimeoutException>();
-
-                    x.Interval(5, TimeSpan.FromSeconds(10));
-                });
-            }
-        }
+        public override IRetryPolicy ReceiveTransportRetryPolicy { get; }
 
         IServiceBusHostTopology IServiceBusHostConfiguration.HostTopology => _hostTopology;
 
@@ -102,18 +99,7 @@
             _topologyConfiguration.Message.SetEntityNameFormatter(new MessageNameFormatterEntityNameFormatter(_messageNameFormatter));
         }
 
-        void IReceiveConfigurator.ReceiveEndpoint(string queueName, Action<IReceiveEndpointConfigurator> configureEndpoint)
-        {
-            ReceiveEndpoint(queueName, configureEndpoint);
-        }
-
-        void IReceiveConfigurator.ReceiveEndpoint(IEndpointDefinition definition, IEndpointNameFormatter endpointNameFormatter,
-            Action<IReceiveEndpointConfigurator> configureEndpoint)
-        {
-            ReceiveEndpoint(definition, endpointNameFormatter, configureEndpoint);
-        }
-
-        public void ReceiveEndpoint(IEndpointDefinition definition, IEndpointNameFormatter endpointNameFormatter,
+        public override void ReceiveEndpoint(IEndpointDefinition definition, IEndpointNameFormatter endpointNameFormatter,
             Action<IServiceBusReceiveEndpointConfigurator> configureEndpoint = null)
         {
             var queueName = definition.GetEndpointName(endpointNameFormatter ?? DefaultEndpointNameFormatter.Instance);
@@ -125,57 +111,29 @@
             });
         }
 
-        public void ReceiveEndpoint(string queueName, Action<IServiceBusReceiveEndpointConfigurator> configureEndpoint)
+        public override void ReceiveEndpoint(string queueName, Action<IServiceBusReceiveEndpointConfigurator> configureEndpoint)
         {
             CreateReceiveEndpointConfiguration(queueName, configureEndpoint);
         }
 
-        public ISendEndpointContextSupervisor CreateSendEndpointContextSupervisor(SendSettings settings)
-        {
-            return _connectionContextSupervisor.CreateSendEndpointContextSupervisor(settings);
-        }
-
         public void ApplyEndpointDefinition(IServiceBusReceiveEndpointConfigurator configurator, IEndpointDefinition definition)
         {
-            configurator.ConfigureConsumeTopology = definition.ConfigureConsumeTopology;
-
             if (definition.IsTemporary)
             {
                 configurator.AutoDeleteOnIdle = Defaults.TemporaryAutoDeleteOnIdle;
                 configurator.RemoveSubscriptions = true;
             }
 
-            if (definition.PrefetchCount.HasValue)
-                configurator.PrefetchCount = (ushort)definition.PrefetchCount.Value;
-
-            if (definition.ConcurrentMessageLimit.HasValue)
-            {
-                var concurrentMessageLimit = definition.ConcurrentMessageLimit.Value;
-
-                // if there is a prefetchCount, and it is greater than the concurrent message limit, we need a filter
-                if (!definition.PrefetchCount.HasValue || definition.PrefetchCount.Value > concurrentMessageLimit)
-                {
-                    configurator.MaxConcurrentCalls = concurrentMessageLimit;
-
-                    // we should determine a good value to use based upon the concurrent message limit
-                    if (definition.PrefetchCount.HasValue == false)
-                    {
-                        var calculatedPrefetchCount = concurrentMessageLimit * 12 / 10;
-
-                        configurator.PrefetchCount = (ushort)calculatedPrefetchCount;
-                    }
-                }
-            }
-
-            definition.Configure(configurator);
+            base.ApplyEndpointDefinition(configurator, definition);
         }
 
         public IServiceBusReceiveEndpointConfiguration CreateReceiveEndpointConfiguration(string queueName,
             Action<IServiceBusReceiveEndpointConfigurator> configure)
         {
-            var settings = new ReceiveEndpointSettings(queueName, new QueueConfigurator(queueName));
-
             var endpointConfiguration = _busConfiguration.CreateEndpointConfiguration();
+
+            var settings = new ReceiveEndpointSettings(endpointConfiguration, queueName, new QueueConfigurator(queueName));
+
 
             return CreateReceiveEndpointConfiguration(settings, endpointConfiguration, configure);
         }
@@ -202,22 +160,19 @@
         public void SubscriptionEndpoint<T>(string subscriptionName, Action<IServiceBusSubscriptionEndpointConfigurator> configure)
             where T : class
         {
-            var settings = new SubscriptionEndpointSettings(_busConfiguration.Topology.Publish.GetMessageTopology<T>().TopicDescription, subscriptionName);
+            var endpointConfiguration = _busConfiguration.CreateEndpointConfiguration();
+            var settings = new SubscriptionEndpointSettings(endpointConfiguration, _busConfiguration.Topology.Publish.GetMessageTopology<T>().TopicDescription,
+                subscriptionName);
 
-            CreateSubscriptionEndpointConfiguration(settings, configure);
+            CreateSubscriptionEndpointConfiguration(settings, endpointConfiguration, configure);
         }
 
         public void SubscriptionEndpoint(string subscriptionName, string topicPath, Action<IServiceBusSubscriptionEndpointConfigurator> configure)
         {
-            var settings = new SubscriptionEndpointSettings(topicPath, subscriptionName);
+            var endpointConfiguration = _busConfiguration.CreateEndpointConfiguration();
+            var settings = new SubscriptionEndpointSettings(endpointConfiguration, topicPath, subscriptionName);
 
-            CreateSubscriptionEndpointConfiguration(settings, configure);
-        }
-
-        public IServiceBusSubscriptionEndpointConfiguration CreateSubscriptionEndpointConfiguration(SubscriptionEndpointSettings settings,
-            Action<IServiceBusSubscriptionEndpointConfigurator> configure = null)
-        {
-            return CreateSubscriptionEndpointConfiguration(settings, _busConfiguration.CreateEndpointConfiguration(), configure);
+            CreateSubscriptionEndpointConfiguration(settings, endpointConfiguration, configure);
         }
 
         public override IHostTopology HostTopology => _hostTopology;
@@ -232,13 +187,33 @@
         {
             var host = new ServiceBusHost(this, _hostTopology);
 
-            foreach (var endpointConfiguration in Endpoints)
+            foreach (var endpointConfiguration in GetConfiguredEndpoints())
                 endpointConfiguration.Build(host);
 
             return host;
         }
 
-        IServiceBusSubscriptionEndpointConfiguration CreateSubscriptionEndpointConfiguration(SubscriptionEndpointSettings settings,
+        public IServiceBusSubscriptionEndpointConfiguration CreateSubscriptionEndpointConfiguration<T>(string subscriptionName,
+            Action<IServiceBusSubscriptionEndpointConfigurator> configure)
+            where T : class
+        {
+            var endpointConfiguration = _busConfiguration.CreateEndpointConfiguration();
+            var settings = new SubscriptionEndpointSettings(endpointConfiguration, _busConfiguration.Topology.Publish.GetMessageTopology<T>().TopicDescription,
+                subscriptionName);
+
+            return CreateSubscriptionEndpointConfiguration(settings, endpointConfiguration, configure);
+        }
+
+        public IServiceBusSubscriptionEndpointConfiguration CreateSubscriptionEndpointConfiguration(string subscriptionName, string topicPath,
+            Action<IServiceBusSubscriptionEndpointConfigurator> configure)
+        {
+            var endpointConfiguration = _busConfiguration.CreateEndpointConfiguration();
+            var settings = new SubscriptionEndpointSettings(endpointConfiguration, topicPath, subscriptionName);
+
+            return CreateSubscriptionEndpointConfiguration(settings, endpointConfiguration, configure);
+        }
+
+        public IServiceBusSubscriptionEndpointConfiguration CreateSubscriptionEndpointConfiguration(SubscriptionEndpointSettings settings,
             IServiceBusEndpointConfiguration endpointConfiguration, Action<IServiceBusSubscriptionEndpointConfigurator> configure)
         {
             if (settings == null)

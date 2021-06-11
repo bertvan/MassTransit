@@ -19,7 +19,8 @@
             if (value == null)
                 return EmptyMessageData<string>.Instance;
 
-            if (value.Length < MessageDataDefaults.Threshold && !MessageDataDefaults.AlwaysWriteToRepository)
+            var bytesCount = Encoding.UTF8.GetByteCount(value);
+            if (bytesCount < MessageDataDefaults.Threshold && !MessageDataDefaults.AlwaysWriteToRepository)
                 return new StringInlineMessageData(value);
 
             byte[] bytes = Encoding.UTF8.GetBytes(value);
@@ -28,7 +29,7 @@
 
             var address = await repository.Put(ms, default, cancellationToken).ConfigureAwait(false);
 
-            if (value.Length < MessageDataDefaults.Threshold)
+            if (bytesCount < MessageDataDefaults.Threshold)
                 return new StringInlineMessageData(value, address);
 
             return new StoredMessageData<string>(address, value);
@@ -55,6 +56,12 @@
             return new StoredMessageData<byte[]>(address, bytes);
         }
 
+        public static Task<MessageData<Stream>> PutStream(this IMessageDataRepository repository, Stream stream,
+            CancellationToken cancellationToken = default)
+        {
+            return PutStream(repository, stream, default, cancellationToken);
+        }
+
         public static async Task<MessageData<string>> PutString(this IMessageDataRepository repository, string value, TimeSpan timeToLive,
             CancellationToken cancellationToken = default)
         {
@@ -63,7 +70,8 @@
             if (value == null)
                 return EmptyMessageData<string>.Instance;
 
-            if (value.Length < MessageDataDefaults.Threshold && !MessageDataDefaults.AlwaysWriteToRepository)
+            var bytesCount = Encoding.UTF8.GetByteCount(value);
+            if (bytesCount < MessageDataDefaults.Threshold && !MessageDataDefaults.AlwaysWriteToRepository)
                 return new StringInlineMessageData(value);
 
             byte[] bytes = Encoding.UTF8.GetBytes(value);
@@ -72,7 +80,7 @@
 
             var address = await repository.Put(ms, timeToLive, cancellationToken).ConfigureAwait(false);
 
-            if (value.Length < MessageDataDefaults.Threshold)
+            if (bytesCount < MessageDataDefaults.Threshold)
                 return new StringInlineMessageData(value, address);
 
             return new StoredMessageData<string>(address, value);
@@ -97,6 +105,19 @@
                 return new BytesInlineMessageData(bytes, address);
 
             return new StoredMessageData<byte[]>(address, bytes);
+        }
+
+        public static async Task<MessageData<Stream>> PutStream(this IMessageDataRepository repository, Stream stream, TimeSpan timeToLive,
+            CancellationToken cancellationToken = default)
+        {
+            if (repository == null)
+                throw new ArgumentNullException(nameof(repository));
+            if (stream == null)
+                return EmptyMessageData<Stream>.Instance;
+
+            var address = await repository.Put(stream, timeToLive, cancellationToken).ConfigureAwait(false);
+
+            return new StoredMessageData<Stream>(address, stream);
         }
 
         public static async Task<MessageData<string>> GetString(this IMessageDataRepository repository, Uri address,

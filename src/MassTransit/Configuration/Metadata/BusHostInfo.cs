@@ -19,14 +19,22 @@ namespace MassTransit.Metadata
             FrameworkVersion = Environment.Version.ToString();
             OperatingSystemVersion = Environment.OSVersion.ToString();
             var entryAssembly = System.Reflection.Assembly.GetEntryAssembly() ?? System.Reflection.Assembly.GetCallingAssembly();
-            var currentProcess = Process.GetCurrentProcess();
             MachineName = Environment.MachineName;
             MassTransitVersion = typeof(IBus).GetTypeInfo().Assembly.GetName().Version.ToString();
 
-            ProcessId = currentProcess.Id;
-            ProcessName = currentProcess.ProcessName;
-            if ("dotnet".Equals(ProcessName, StringComparison.OrdinalIgnoreCase))
-                ProcessName = GetUsefulProcessName(ProcessName);
+            try
+            {
+                using var currentProcess = Process.GetCurrentProcess();
+                ProcessId = currentProcess.Id;
+                ProcessName = currentProcess.ProcessName;
+                if ("dotnet".Equals(ProcessName, StringComparison.OrdinalIgnoreCase))
+                    ProcessName = GetUsefulProcessName(ProcessName);
+            }
+            catch (PlatformNotSupportedException)
+            {
+                ProcessId = 0;
+                ProcessName = GetUsefulProcessName("UWP");
+            }
 
             var assemblyName = entryAssembly.GetName();
             Assembly = assemblyName.Name;

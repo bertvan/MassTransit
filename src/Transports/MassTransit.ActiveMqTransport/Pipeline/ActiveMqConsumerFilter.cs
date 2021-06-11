@@ -18,7 +18,6 @@ namespace MassTransit.ActiveMqTransport.Pipeline
     /// A filter that uses the model context to create a basic consumer and connect it to the model
     /// </summary>
     public class ActiveMqConsumerFilter :
-        Supervisor,
         IFilter<SessionContext>
     {
         readonly ActiveMqReceiveEndpointContext _context;
@@ -38,7 +37,7 @@ namespace MassTransit.ActiveMqTransport.Pipeline
 
             var inputAddress = receiveSettings.GetInputAddress(context.ConnectionContext.HostAddress);
 
-            var executor = new ChannelExecutor(1, receiveSettings.PrefetchCount);
+            var executor = new ChannelExecutor(1, receiveSettings.ConcurrentMessageLimit);
 
             var consumers = new List<Task<ActiveMqConsumer>>
             {
@@ -51,6 +50,8 @@ namespace MassTransit.ActiveMqTransport.Pipeline
             ActiveMqConsumer[] actualConsumers = await Task.WhenAll(consumers).ConfigureAwait(false);
 
             var supervisor = CreateConsumerSupervisor(context, actualConsumers);
+
+            LogContext.Debug?.Log("Consumers Ready: {InputAddress}", _context.InputAddress);
 
             await _context.TransportObservers.Ready(new ReceiveTransportReadyEvent(inputAddress)).ConfigureAwait(false);
 
@@ -81,7 +82,7 @@ namespace MassTransit.ActiveMqTransport.Pipeline
             foreach (var consumer in actualConsumers)
                 supervisor.Add(consumer);
 
-            Add(supervisor);
+            _context.AddConsumeAgent(supervisor);
 
             void HandleException(Exception exception)
             {
@@ -92,12 +93,13 @@ namespace MassTransit.ActiveMqTransport.Pipeline
 
             supervisor.SetReady();
 
-            supervisor.Completed.ContinueWith(task => context.ConnectionContext.Connection.ExceptionListener -= HandleException);
+            supervisor.Completed.ContinueWith(task => context.ConnectionContext.Connection.ExceptionListener -= HandleException,
+                TaskContinuationOptions.ExecuteSynchronously);
 
             return supervisor;
         }
 
-        async Task<ActiveMqConsumer> CreateConsumer(SessionContext context, string entityName, string selector, ushort prefetchCount, ChannelExecutor executor)
+        async Task<ActiveMqConsumer> CreateConsumer(SessionContext context, string entityName, string selector, int prefetchCount, ChannelExecutor executor)
         {
             var queueName = $"{entityName}?consumer.prefetchSize={prefetchCount}";
 

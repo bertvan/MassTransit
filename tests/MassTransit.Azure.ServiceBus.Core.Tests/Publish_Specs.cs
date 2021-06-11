@@ -1,8 +1,11 @@
 namespace MassTransit.Azure.ServiceBus.Core.Tests
 {
     using System;
+    using System.Threading;
     using System.Threading.Tasks;
     using GreenPipes;
+    using GreenPipes.Internals.Extensions;
+    using MassTransit.Testing;
     using NUnit.Framework;
     using Serialization;
     using TestFramework;
@@ -98,18 +101,10 @@ namespace MassTransit.Azure.ServiceBus.Core.Tests
 
 
     [TestFixture]
+    [Category("Flaky")]
     public class Publishing_an_encrypted_message_to_an_endpoint :
         AzureServiceBusTestFixture
     {
-        [Test]
-        [Explicit]
-        public void Should_return_a_wonderful_breakdown_of_the_guts_inside_it()
-        {
-            var result = Bus.GetProbeResult();
-
-            Console.WriteLine(result.ToJsonString());
-        }
-
         [Test]
         public async Task Should_succeed()
         {
@@ -176,26 +171,63 @@ namespace MassTransit.Azure.ServiceBus.Core.Tests
 
 
     [TestFixture]
+    [Explicit]
     public class Publishing_a_message_to_an_remove_subscriptions_endpoint :
-        AzureServiceBusTestFixture
+        AsyncTestFixture
     {
-        [Test]
-        public async Task Should_succeed()
+        public Publishing_a_message_to_an_remove_subscriptions_endpoint()
+            : base(new InMemoryTestHarness())
         {
-            await Bus.Publish(new PingMessage());
-
-            await _consumer;
+            TestTimeout = TimeSpan.FromMinutes(3);
         }
 
-        Task<ConsumeContext<PingMessage>> _consumer;
-
-        protected override void ConfigureServiceBusBus(IServiceBusBusFactoryConfigurator configurator)
+        [Test]
+        public async Task Should_create_receive_endpoint_and_start()
         {
-            configurator.ReceiveEndpoint(e =>
+            ServiceBusTokenProviderSettings settings = new TestAzureServiceBusAccountSettings();
+
+            var serviceUri = AzureServiceBusEndpointUriCreator.Create(Configuration.ServiceNamespace);
+
+            var handled = new TaskCompletionSource<PingMessage>();
+
+            var bus = Bus.Factory.CreateUsingAzureServiceBus(x =>
             {
-                e.RemoveSubscriptions = true;
-                _consumer = HandledByConsumer<PingMessage>(e);
+                BusTestFixture.ConfigureBusDiagnostics(x);
+                x.Host(serviceUri, h =>
+                {
+                    h.SharedAccessSignature(s =>
+                    {
+                        s.KeyName = settings.KeyName;
+                        s.SharedAccessKey = settings.SharedAccessKey;
+                        s.TokenTimeToLive = settings.TokenTimeToLive;
+                        s.TokenScope = settings.TokenScope;
+                    });
+                });
+
+                x.ReceiveEndpoint(e =>
+                {
+                    e.RemoveSubscriptions = true;
+
+                    e.Handler<PingMessage>(async context =>
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(1));
+
+                        handled.TrySetResult(context.Message);
+                    });
+                });
             });
+
+            var busHandle = await bus.StartAsync();
+            try
+            {
+                await bus.Publish(new PingMessage());
+
+                await handled.Task.OrTimeout(TimeSpan.FromSeconds(10000));
+            }
+            finally
+            {
+                await busHandle.StopAsync(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+            }
         }
     }
 }

@@ -6,12 +6,12 @@
     using System.Threading.Tasks;
     using GreenPipes;
     using NUnit.Framework;
+    using RabbitMQ.Client;
     using TestFramework.Messages;
 
 
     [TestFixture]
     [Explicit]
-    [Category("SlowAF")]
     public class Pounding_the_crap_out_of_the_send_endpoint :
         RabbitMqTestFixture
     {
@@ -86,5 +86,12 @@
                 });
             });
         }
+
+        protected override void OnCleanupVirtualHost(IModel model)
+        {
+            model.ExchangeDelete("input_queue_express");
+            model.QueueDelete("input_queue_express");
+        }
+
     }
 }

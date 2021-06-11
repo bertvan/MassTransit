@@ -2,6 +2,8 @@
 {
     using System;
     using Builders;
+    using Context;
+    using Contexts;
     using MassTransit.Configuration;
 
 
@@ -30,29 +32,42 @@
 
         IInMemoryReceiveEndpointConfigurator IInMemoryReceiveEndpointConfiguration.Configurator => this;
 
-        public int ConcurrencyLimit { get; set; }
-
         IInMemoryTopologyConfiguration IInMemoryEndpointConfiguration.Topology => _endpointConfiguration.Topology;
 
         public override Uri HostAddress { get; }
 
         public override Uri InputAddress { get; }
 
+        public override ReceiveEndpointContext CreateReceiveEndpointContext()
+        {
+            return CreateInMemoryReceiveEndpointContext();
+        }
+
         public void Build(IHost host)
+        {
+            var context = CreateInMemoryReceiveEndpointContext();
+
+            var transport = new InMemoryReceiveTransport(context, _queueName);
+
+            var receiveEndpoint = new ReceiveEndpoint(transport, context);
+
+            host.AddReceiveEndpoint(_queueName, receiveEndpoint);
+
+            ReceiveEndpoint = receiveEndpoint;
+        }
+
+        public int ConcurrencyLimit
+        {
+            set => ConcurrentMessageLimit = value;
+        }
+
+        InMemoryReceiveEndpointContext CreateInMemoryReceiveEndpointContext()
         {
             var builder = new InMemoryReceiveEndpointBuilder(_hostConfiguration, this);
 
             ApplySpecifications(builder);
 
-            var receiveEndpointContext = builder.CreateReceiveEndpointContext();
-
-            var transport = _hostConfiguration.TransportProvider.GetReceiveTransport(_queueName, receiveEndpointContext);
-
-            var receiveEndpoint = new ReceiveEndpoint(transport, receiveEndpointContext);
-
-            host.AddReceiveEndpoint(_queueName, receiveEndpoint);
-
-            ReceiveEndpoint = receiveEndpoint;
+            return builder.CreateReceiveEndpointContext();
         }
     }
 }

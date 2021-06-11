@@ -8,6 +8,7 @@ namespace MassTransit.WindsorIntegration.Registration
     using Clients;
     using Courier;
     using Definition;
+    using Futures;
     using MassTransit.Registration;
     using Mediator;
     using Saga;
@@ -28,18 +29,20 @@ namespace MassTransit.WindsorIntegration.Registration
         public void RegisterConsumer<T>()
             where T : class, IConsumer
         {
-            _container.Register(
-                Component.For<T>()
-                    .LifestyleScoped());
+            if (!_container.Kernel.HasComponent(typeof(T)))
+                _container.Register(
+                    Component.For<T>()
+                        .LifestyleScoped());
         }
 
         public void RegisterConsumerDefinition<TDefinition, TConsumer>()
             where TDefinition : class, IConsumerDefinition<TConsumer>
             where TConsumer : class, IConsumer
         {
-            _container.Register(
-                Component.For<IConsumerDefinition<TConsumer>>()
-                    .ImplementedBy<TDefinition>());
+            if (!_container.Kernel.HasComponent(typeof(IConsumerDefinition<TConsumer>)))
+                _container.Register(
+                    Component.For<IConsumerDefinition<TConsumer>>()
+                        .ImplementedBy<TDefinition>());
         }
 
         public void RegisterSaga<T>()
@@ -78,9 +81,10 @@ namespace MassTransit.WindsorIntegration.Registration
             where TDefinition : class, ISagaDefinition<TSaga>
             where TSaga : class, ISaga
         {
-            _container.Register(
-                Component.For<ISagaDefinition<TSaga>>()
-                    .ImplementedBy<TDefinition>());
+            if (!_container.Kernel.HasComponent(typeof(ISagaDefinition<TSaga>)))
+                _container.Register(
+                    Component.For<ISagaDefinition<TSaga>>()
+                        .ImplementedBy<TDefinition>());
         }
 
         public void RegisterExecuteActivity<TActivity, TArguments>()
@@ -134,6 +138,24 @@ namespace MassTransit.WindsorIntegration.Registration
                 Component.For<IEndpointDefinition<T>>()
                     .ImplementedBy<TDefinition>(),
                 Component.For<IEndpointSettings<IEndpointDefinition<T>>>().Instance(settings));
+        }
+
+        public void RegisterFuture<TFuture>()
+            where TFuture : MassTransitStateMachine<FutureState>
+        {
+            _container.Register(
+                Component.For<TFuture>().LifestyleSingleton()
+            );
+        }
+
+        public void RegisterFutureDefinition<TDefinition, TFuture>()
+            where TDefinition : class, IFutureDefinition<TFuture>
+            where TFuture : MassTransitStateMachine<FutureState>
+        {
+            if (!_container.Kernel.HasComponent(typeof(IFutureDefinition<TFuture>)))
+                _container.Register(
+                    Component.For<IFutureDefinition<TFuture>>()
+                        .ImplementedBy<TDefinition>());
         }
 
         public void RegisterRequestClient<T>(RequestTimeout timeout = default)

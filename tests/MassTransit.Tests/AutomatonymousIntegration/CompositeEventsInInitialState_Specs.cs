@@ -3,7 +3,6 @@
     using System;
     using System.Threading.Tasks;
     using Automatonymous;
-    using Automatonymous.Contexts;
     using MassTransit.Saga;
     using MassTransit.Testing;
     using NUnit.Framework;
@@ -28,7 +27,7 @@
             Assert.IsTrue(saga.HasValue);
 
             Task<ConsumeContext<CompleteMessage>> received =
-                ConnectPublishHandler<CompleteMessage>(x => x.Message.CorrelationId == correlationId);
+                await ConnectPublishHandler<CompleteMessage>(x => x.Message.CorrelationId == correlationId);
 
             await received;
         }
@@ -44,12 +43,6 @@
         }
 
         TestStateMachine _machine;
-
-        async Task<State> GetCurrentState(Instance state)
-        {
-            var context = new StateMachineInstanceContext<Instance>(state);
-            return await _machine.GetState(context.Instance);
-        }
 
 
         class Instance :

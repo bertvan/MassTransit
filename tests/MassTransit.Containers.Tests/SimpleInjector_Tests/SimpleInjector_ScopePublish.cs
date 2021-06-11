@@ -1,8 +1,7 @@
 namespace MassTransit.Containers.Tests.SimpleInjector_Tests
 {
-    using System;
+    using System.Threading.Tasks;
     using Common_Tests;
-    using GreenPipes;
     using NUnit.Framework;
     using SimpleInjector;
     using SimpleInjector.Lifestyles;
@@ -24,7 +23,7 @@ namespace MassTransit.Containers.Tests.SimpleInjector_Tests
         public SimpleInjector_ScopePublish()
         {
             _container = new Container();
-            _container.Options.DefaultScopedLifestyle = new AsyncScopedLifestyle();
+            _container.SetMassTransitContainerOptions();
 
             _container.AddMassTransit(cfg =>
             {
@@ -34,18 +33,10 @@ namespace MassTransit.Containers.Tests.SimpleInjector_Tests
         }
 
         [OneTimeTearDown]
-        public void Close_container()
+        public async Task Close_container()
         {
-            _childContainer.Dispose();
-            _container.Dispose();
-        }
-
-        protected override void ConfigureInMemoryBus(IInMemoryBusFactoryConfigurator configurator)
-        {
-            configurator.UseExecute(context => Console.WriteLine(
-                $"Received (input_queue): {context.ReceiveContext.TransportHeaders.Get("MessageId", "N/A")}, Types = ({string.Join(",", context.SupportedMessageTypes)})"));
-
-            base.ConfigureInMemoryBus(configurator);
+            await _childContainer.DisposeAsync();
+            await _container.DisposeAsync();
         }
 
         protected override IPublishEndpoint GetPublishEndpoint()

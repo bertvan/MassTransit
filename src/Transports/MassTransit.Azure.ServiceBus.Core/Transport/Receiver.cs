@@ -1,13 +1,14 @@
 ﻿namespace MassTransit.Azure.ServiceBus.Core.Transport
 {
     using System;
-    using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
     using Context;
     using Contexts;
+    using GreenPipes;
     using GreenPipes.Agents;
     using GreenPipes.Internals.Extensions;
+    using Logging;
     using Microsoft.Azure.ServiceBus;
     using Microsoft.Azure.ServiceBus.Core;
     using Transports.Metrics;
@@ -15,7 +16,7 @@
 
 
     public class Receiver :
-        Supervisor,
+        Agent,
         IReceiver
     {
         readonly ClientContext _context;
@@ -46,24 +47,44 @@
             return TaskUtil.Completed;
         }
 
-        protected Task ExceptionHandler(ExceptionReceivedEventArgs args)
+        protected async Task ExceptionHandler(ExceptionReceivedEventArgs args)
         {
-            if (!(args.Exception is OperationCanceledException))
+            var requiresRecycle = args.Exception switch
             {
-                LogContext.Error?.Log(args.Exception, "Exception on Receiver {InputAddress} during {Action}", _context.InputAddress,
-                    args.ExceptionReceivedContext.Action);
+                MessageLockLostException _ => false,
+                MessageTimeToLiveExpiredException _ => false,
+                ServiceBusException {IsTransient: true} => false,
+                _ => true
+            };
+
+            if (args.Exception is ServiceBusCommunicationException {IsTransient: true})
+            {
+                LogContext.Debug?.Log(args.Exception,
+                    "Exception on Receiver {InputAddress} during {Action} ActiveDispatchCount({activeDispatch}) ErrorRequiresRecycle({requiresRecycle})",
+                    _context.InputAddress, args.ExceptionReceivedContext.Action, _messageReceiver.ActiveDispatchCount, requiresRecycle);
+            }
+            else if (args.Exception is ObjectDisposedException {ObjectName: "$cbs"})
+            {
+                // don't log this one
+            }
+            else if (!(args.Exception is OperationCanceledException))
+            {
+                EnabledLogger? logger = requiresRecycle ? LogContext.Error : LogContext.Warning;
+
+                logger?.Log(args.Exception,
+                    "Exception on Receiver {InputAddress} during {Action} ActiveDispatchCount({activeDispatch}) ErrorRequiresRecycle({requiresRecycle})",
+                    _context.InputAddress, args.ExceptionReceivedContext.Action, _messageReceiver.ActiveDispatchCount, requiresRecycle);
             }
 
-            if (_messageReceiver.ActiveDispatchCount == 0)
+            if (requiresRecycle)
             {
-                LogContext.Debug?.Log("Receiver shutdown completed: {InputAddress}", _context.InputAddress);
+                if (_deliveryComplete.TrySetResult(false))
+                {
+                    await _context.NotifyFaulted(args.Exception, args.ExceptionReceivedContext.EntityPath).ConfigureAwait(false);
 
-                _deliveryComplete.TrySetResult(true);
-
-                SetCompleted(TaskUtil.Faulted<bool>(args.Exception));
+                    await this.Stop($"Receiver Exception: {args.Exception.Message}").ConfigureAwait(false);
+                }
             }
-
-            return Task.CompletedTask;
         }
 
         async Task HandleDeliveryComplete()
@@ -72,21 +93,21 @@
                 _deliveryComplete.TrySetResult(true);
         }
 
-        protected override async Task StopSupervisor(StopSupervisorContext context)
+        protected override async Task StopAgent(StopContext context)
         {
-            LogContext.Debug?.Log("Stopping receiver: {InputAddress}", _context.InputAddress);
+            await _context.ShutdownAsync().ConfigureAwait(false);
 
             SetCompleted(ActiveAndActualAgentsCompleted(context));
 
             await Completed.ConfigureAwait(false);
 
             await _context.CloseAsync().ConfigureAwait(false);
+
+            LogContext.Debug?.Log("Receiver stopped: {InputAddress}", _context.InputAddress);
         }
 
-        async Task ActiveAndActualAgentsCompleted(StopSupervisorContext context)
+        async Task ActiveAndActualAgentsCompleted(StopContext context)
         {
-            await Task.WhenAll(context.Agents.Select(x => Completed)).OrCanceled(context.CancellationToken).ConfigureAwait(false);
-
             if (_messageReceiver.ActiveDispatchCount > 0)
             {
                 try
@@ -102,9 +123,6 @@
 
         Task OnMessage(IReceiverClient messageReceiver, Message message, CancellationToken cancellationToken)
         {
-            if (IsStopping)
-                return WaitForDeliveryComplete();
-
             return _messageReceiver.Handle(message, cancellationToken, context => AddReceiveContextPayloads(context, messageReceiver, message));
         }
 
@@ -114,18 +132,6 @@
 
             receiveContext.GetOrAddPayload(() => lockContext);
             receiveContext.GetOrAddPayload(() => _context);
-        }
-
-        protected async Task WaitForDeliveryComplete()
-        {
-            try
-            {
-                await _deliveryComplete.Task.ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                LogContext.Error?.Log(exception, "Abandon message faulted during shutdown: {InputAddress}", _context.InputAddress);
-            }
         }
     }
 }

@@ -45,7 +45,7 @@ namespace MassTransit.Definition
 
         void IConsumerDefinition<TConsumer>.Configure(IReceiveEndpointConfigurator endpointConfigurator, IConsumerConfigurator<TConsumer> consumerConfigurator)
         {
-            if (_concurrentMessageLimit.HasValue)
+            if (_concurrentMessageLimit.HasValue && endpointConfigurator.ConcurrentMessageLimit > _concurrentMessageLimit)
                 consumerConfigurator.UseConcurrentMessageLimit(_concurrentMessageLimit.Value);
 
             ConfigureConsumer(endpointConfigurator, consumerConfigurator);
@@ -71,26 +71,6 @@ namespace MassTransit.Definition
             configure?.Invoke(configurator);
 
             EndpointDefinition = new ConsumerEndpointDefinition<TConsumer>(configurator.Settings);
-        }
-
-        /// <summary>
-        /// Define a message handled by the consumer
-        /// </summary>
-        /// <param name="configure"></param>
-        /// <typeparam name="T">The message type</typeparam>
-        protected void Message<T>(Action<IConsumerMessageDefinitionConfigurator<TConsumer, T>> configure = null)
-            where T : class
-        {
-        }
-
-        /// <summary>
-        /// Define the request message handled by the consumer
-        /// </summary>
-        /// <param name="configure"></param>
-        /// <typeparam name="T">The message type</typeparam>
-        protected void Request<T>(Action<IConsumerRequestDefinitionConfigurator<TConsumer, T>> configure = null)
-            where T : class
-        {
         }
 
         /// <summary>

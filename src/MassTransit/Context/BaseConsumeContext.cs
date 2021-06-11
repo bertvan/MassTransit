@@ -10,6 +10,7 @@ namespace MassTransit.Context
     using GreenPipes;
     using GreenPipes.Internals.Extensions;
     using Metadata;
+    using Pipeline.Filters.Outbox;
     using Transports;
 
 
@@ -244,13 +245,21 @@ namespace MassTransit.Context
         protected virtual async Task GenerateFault<T>(ConsumeContext<T> context, Exception exception)
             where T : class
         {
-            Fault<T> fault = new FaultEvent<T>(context.Message, context.MessageId, HostMetadataCache.Host, exception, context.SupportedMessageTypes.ToArray());
+            if (context.ReceiveContext.PublishFaults || context.FaultAddress != null || context.ResponseAddress != null)
+            {
+                Fault<T> fault = new FaultEvent<T>(context.Message, context.MessageId, HostMetadataCache.Host, exception,
+                    context.SupportedMessageTypes.ToArray());
 
-            var faultPipe = new FaultPipe<T>(context);
+                var faultPipe = new FaultPipe<T>(context);
 
-            var faultEndpoint = await this.GetFaultEndpoint<T>().ConfigureAwait(false);
+                ConsumeContext faultContext = context;
+                while (faultContext.TryGetPayload<InMemoryOutboxConsumeContext>(out var outboxConsumeContext))
+                    faultContext = outboxConsumeContext.CapturedContext;
 
-            await faultEndpoint.Send(fault, faultPipe, CancellationToken).ConfigureAwait(false);
+                var faultEndpoint = await faultContext.GetFaultEndpoint<T>().ConfigureAwait(false);
+
+                await faultEndpoint.Send(fault, faultPipe, CancellationToken).ConfigureAwait(false);
+            }
         }
 
         Task ConsumeTask(Task task)

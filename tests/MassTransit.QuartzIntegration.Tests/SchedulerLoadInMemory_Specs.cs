@@ -9,6 +9,7 @@
 
 
     [TestFixture]
+    [Category("Flaky")]
     public class When_processing_a_lot_of_saga_instances :
         QuartzInMemoryTestFixture
     {
@@ -21,7 +22,7 @@
             {
                 var correlationId = NewId.NextGuid();
 
-                tasks.Add(ConnectPublishHandler<Stopped>(context => context.Message.CorrelationId == correlationId));
+                tasks.Add(await ConnectPublishHandler<Stopped>(context => context.Message.CorrelationId == correlationId));
 
                 await InputQueueSendEndpoint.Send(new Start {CorrelationId = correlationId});
             }

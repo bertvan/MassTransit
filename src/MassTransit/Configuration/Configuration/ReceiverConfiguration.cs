@@ -3,7 +3,6 @@ namespace MassTransit.Configuration
     using System;
     using System.Collections.Generic;
     using System.Linq;
-    using Context;
     using GreenPipes;
     using Transports;
 
@@ -22,9 +21,6 @@ namespace MassTransit.Configuration
 
             Specifications = new List<IReceiveEndpointSpecification>();
 
-            if (LogContext.Current == null)
-                LogContext.ConfigureCurrentLogContext();
-
             this.ThrowOnSkippedMessages();
             this.RethrowFaultedMessages();
         }
@@ -36,6 +32,11 @@ namespace MassTransit.Configuration
             set { }
         }
 
+        public bool PublishFaults
+        {
+            set { }
+        }
+
         public void AddDependency(IReceiveEndpointObserverConnector connector)
         {
         }
@@ -43,6 +44,11 @@ namespace MassTransit.Configuration
         ConnectHandle IReceiveEndpointObserverConnector.ConnectReceiveEndpointObserver(IReceiveEndpointObserver observer)
         {
             return _configuration.ConnectReceiveEndpointObserver(observer);
+        }
+
+        public void ConfigureMessageTopology<T>(bool enabled = true)
+            where T : class
+        {
         }
 
         public void AddEndpointSpecification(IReceiveEndpointSpecification specification)

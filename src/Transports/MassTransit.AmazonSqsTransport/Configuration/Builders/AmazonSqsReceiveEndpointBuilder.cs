@@ -5,6 +5,7 @@
     using Contexts;
     using GreenPipes;
     using MassTransit.Builders;
+    using MassTransit.Pipeline;
     using Pipeline;
     using Topology;
     using Topology.Builders;
@@ -25,16 +26,16 @@
             _configuration = configuration;
         }
 
-        public override ConnectHandle ConnectConsumePipe<T>(IPipe<ConsumeContext<T>> pipe)
+        public override ConnectHandle ConnectConsumePipe<T>(IPipe<ConsumeContext<T>> pipe, ConnectPipeOptions options)
         {
-            if (_configuration.ConfigureConsumeTopology)
+            if (_configuration.ConfigureConsumeTopology && options.HasFlag(ConnectPipeOptions.ConfigureConsumeTopology))
             {
-                _configuration.Topology.Consume
-                    .GetMessageTopology<T>()
-                    .Subscribe();
+                IAmazonSqsMessageConsumeTopologyConfigurator<T> topology = _configuration.Topology.Consume.GetMessageTopology<T>();
+                if (topology.ConfigureConsumeTopology)
+                    topology.Subscribe();
             }
 
-            return base.ConnectConsumePipe(pipe);
+            return base.ConnectConsumePipe(pipe, options);
         }
 
         public SqsReceiveEndpointContext CreateReceiveEndpointContext()
@@ -42,8 +43,7 @@
             var brokerTopology = BuildTopology(_configuration.Settings);
 
             var headerAdapter = new TransportSetHeaderAdapter<MessageAttributeValue>(
-                new SqsHeaderValueConverter(_hostConfiguration.Settings.AllowTransportHeader),
-                TransportHeaderOptions.IncludeFaultMessage);
+                new SqsHeaderValueConverter(_hostConfiguration.Settings.AllowTransportHeader), TransportHeaderOptions.IncludeFaultMessage);
 
             var deadLetterTransport = CreateDeadLetterTransport(headerAdapter);
 

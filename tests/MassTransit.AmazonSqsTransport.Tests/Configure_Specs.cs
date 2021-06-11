@@ -2,18 +2,16 @@
 {
     using System;
     using System.Collections.Generic;
-    using System.Diagnostics;
     using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
     using Amazon.Runtime;
     using Amazon.SimpleNotificationService;
     using Amazon.SQS;
-    using Context;
     using GreenPipes.Internals.Extensions;
     using MassTransit.Testing;
     using NUnit.Framework;
-    using TestFramework.Logging;
+    using TestFramework;
     using TestFramework.Messages;
     using Testing;
     using Util;
@@ -125,12 +123,12 @@
         {
             var busControl = Bus.Factory.CreateUsingAmazonSqs(cfg =>
             {
-                cfg.Host(new Uri("amazonsqs://localhost:4576"), h =>
+                cfg.Host(new Uri("amazonsqs://localhost:4566"), h =>
                 {
                     h.AccessKey("admin");
                     h.SecretKey("admin");
-                    h.Config(new AmazonSimpleNotificationServiceConfig {ServiceURL = "http://localhost:4575"});
-                    h.Config(new AmazonSQSConfig {ServiceURL = "http://localhost:4576"});
+                    h.Config(new AmazonSimpleNotificationServiceConfig {ServiceURL = "http://localhost:4566"});
+                    h.Config(new AmazonSQSConfig {ServiceURL = "http://localhost:4566"});
                 });
             });
 
@@ -201,15 +199,19 @@
         }
 
         [Test]
-        [Category("SlowAF")]
+        [Category("Flaky")]
         public async Task Should_connect_with_accessKey_and_secretKey()
         {
             var busControl = Bus.Factory.CreateUsingAmazonSqs(cfg =>
             {
-                cfg.Host("ap-southeast-2", h =>
+                BusTestFixture.ConfigureBusDiagnostics(cfg);
+
+                cfg.Host(new Uri("amazonsqs://localhost:4566"), h =>
                 {
-                    h.AccessKey(AwsAccessKey);
-                    h.SecretKey(AwsSecretKey);
+                    h.AccessKey("admin");
+                    h.SecretKey("admin");
+                    h.Config(new AmazonSimpleNotificationServiceConfig {ServiceURL = "http://localhost:4566"});
+                    h.Config(new AmazonSQSConfig {ServiceURL = "http://localhost:4566"});
                 });
             });
 
@@ -224,15 +226,19 @@
         }
 
         [Test]
-        [Category("SlowAF")]
+        [Category("Flaky")]
         public async Task Should_connect_with_credentials()
         {
             var busControl = Bus.Factory.CreateUsingAmazonSqs(cfg =>
             {
-                cfg.Host("ap-southeast-2", h =>
+                BusTestFixture.ConfigureBusDiagnostics(cfg);
+
+                cfg.Host(new Uri("amazonsqs://localhost:4566"), h =>
                 {
-                    var credentials = new BasicAWSCredentials(AwsAccessKey, AwsSecretKey);
-                    h.Credentials(credentials);
+                    h.AccessKey("admin");
+                    h.SecretKey("admin");
+                    h.Config(new AmazonSimpleNotificationServiceConfig {ServiceURL = "http://localhost:4566"});
+                    h.Config(new AmazonSQSConfig {ServiceURL = "http://localhost:4566"});
                 });
             });
 
@@ -247,10 +253,10 @@
         }
 
         [Test]
-        [Category("SlowAF")]
+        [Category("Flaky")]
         public async Task Should_create_queue_with_multiple_subscriptions()
         {
-            Type[] messageTypes = new[]
+            Type[] messageTypes =
             {
                 typeof(Message0),
                 typeof(Message1),
@@ -281,10 +287,14 @@
 
             var busControl = Bus.Factory.CreateUsingAmazonSqs(cfg =>
             {
-                cfg.Host("ap-southeast-2", h =>
+                BusTestFixture.ConfigureBusDiagnostics(cfg);
+
+                cfg.Host(new Uri("amazonsqs://localhost:4566"), h =>
                 {
-                    h.AccessKey(AwsAccessKey);
-                    h.SecretKey(AwsSecretKey);
+                    h.AccessKey("admin");
+                    h.SecretKey("admin");
+                    h.Config(new AmazonSimpleNotificationServiceConfig {ServiceURL = "http://localhost:4566"});
+                    h.Config(new AmazonSQSConfig {ServiceURL = "http://localhost:4566"});
                 });
 
                 Func<object, Task> receiveTask = t =>
@@ -333,15 +343,19 @@
         }
 
         [Test]
-        [Category("SlowAF")]
+        [Category("Flaky")]
         public async Task Should_do_a_bunch_of_requests_and_responses()
         {
             var bus = Bus.Factory.CreateUsingAmazonSqs(sbc =>
             {
-                sbc.Host("us-east-2", h =>
+                BusTestFixture.ConfigureBusDiagnostics(sbc);
+
+                sbc.Host(new Uri("amazonsqs://localhost:4566"), h =>
                 {
-                    h.AccessKey(AwsAccessKey);
-                    h.SecretKey(AwsSecretKey);
+                    h.AccessKey("admin");
+                    h.SecretKey("admin");
+                    h.Config(new AmazonSimpleNotificationServiceConfig {ServiceURL = "http://localhost:4566"});
+                    h.Config(new AmazonSQSConfig {ServiceURL = "http://localhost:4566"});
                 });
 
                 sbc.ReceiveEndpoint("test", e =>
@@ -368,17 +382,21 @@
         }
 
         [Test]
-        [Category("SlowAF")]
+        [Category("Flaky")]
         public async Task Should_succeed_and_connect_when_properly_configured()
         {
             var received = new TaskCompletionSource<bool>();
 
             var busControl = Bus.Factory.CreateUsingAmazonSqs(cfg =>
             {
-                cfg.Host("us-east-2", h =>
+                BusTestFixture.ConfigureBusDiagnostics(cfg);
+
+                cfg.Host(new Uri("amazonsqs://localhost:4566"), h =>
                 {
-                    h.AccessKey(AwsAccessKey);
-                    h.SecretKey(AwsSecretKey);
+                    h.AccessKey("admin");
+                    h.SecretKey("admin");
+                    h.Config(new AmazonSimpleNotificationServiceConfig {ServiceURL = "http://localhost:4566"});
+                    h.Config(new AmazonSQSConfig {ServiceURL = "http://localhost:4566"});
                 });
 
                 cfg.ReceiveEndpoint("input-queue", x =>
@@ -415,18 +433,6 @@
 
         const string AwsAccessKey = "{YOUR AWS ACCESS KEY}";
         const string AwsSecretKey = "{YOUR AWS SECRET KEY}";
-        static int _subscribedObserver;
-
-        [OneTimeSetUp]
-        public void Setup()
-        {
-            var loggerFactory = new TestOutputLoggerFactory(true);
-
-            LogContext.ConfigureCurrentLogContext(loggerFactory);
-
-            if (Interlocked.CompareExchange(ref _subscribedObserver, 1, 0) == 0)
-                DiagnosticListener.AllListeners.Subscribe(new DiagnosticListenerObserver());
-        }
 
 
         public class Message0

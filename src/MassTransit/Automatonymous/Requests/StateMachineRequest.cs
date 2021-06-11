@@ -1,6 +1,7 @@
 namespace Automatonymous.Requests
 {
     using System;
+    using System.Collections.Generic;
     using System.Linq.Expressions;
     using Events;
     using GreenPipes.Internals.Reflection;
@@ -14,16 +15,23 @@ namespace Automatonymous.Requests
         where TRequest : class
         where TResponse : class
     {
+        readonly IList<string> _accept;
+
         readonly string _name;
         readonly ReadWriteProperty<TInstance, Guid?> _requestIdProperty;
         readonly RequestSettings _settings;
 
-        public StateMachineRequest(string name, Expression<Func<TInstance, Guid?>> requestIdExpression, RequestSettings settings)
+        public StateMachineRequest(string name, RequestSettings settings, Expression<Func<TInstance, Guid?>> requestIdExpression = default)
         {
             _name = name;
             _settings = settings;
 
-            _requestIdProperty = new ReadWriteProperty<TInstance, Guid?>(requestIdExpression.GetPropertyInfo());
+            _accept = new List<string>();
+
+            AcceptResponse<TResponse>();
+
+            if (requestIdExpression != null)
+                _requestIdProperty = new ReadWriteProperty<TInstance, Guid?>(requestIdExpression.GetPropertyInfo());
         }
 
         string Request<TInstance, TRequest, TResponse>.Name => _name;
@@ -38,7 +46,7 @@ namespace Automatonymous.Requests
             if (instance == null)
                 throw new ArgumentNullException(nameof(instance));
 
-            _requestIdProperty.Set(instance, requestId);
+            _requestIdProperty?.Set(instance, requestId);
         }
 
         public Guid? GetRequestId(TInstance instance)
@@ -46,7 +54,21 @@ namespace Automatonymous.Requests
             if (instance == null)
                 throw new ArgumentNullException(nameof(instance));
 
-            return _requestIdProperty.Get(instance);
+            return _requestIdProperty != null
+                ? _requestIdProperty.Get(instance)
+                : instance.CorrelationId;
+        }
+
+        public Guid GenerateRequestId(TInstance instance)
+        {
+            return _requestIdProperty != null
+                ? NewId.NextGuid()
+                : instance.CorrelationId;
+        }
+
+        public void SetSendContextHeaders(SendContext<TRequest> context)
+        {
+            context.Headers.Set(MessageHeaders.Request.Accept, _accept);
         }
 
         public bool EventFilter(EventContext<TInstance, RequestTimeoutExpired<TRequest>> context)
@@ -57,9 +79,15 @@ namespace Automatonymous.Requests
             if (!consumeContext.RequestId.HasValue)
                 return false;
 
-            Guid? requestId = _requestIdProperty.Get(context.Instance);
+            Guid? requestId = GetRequestId(context.Instance);
 
             return requestId.HasValue && requestId.Value == consumeContext.RequestId.Value;
+        }
+
+        protected void AcceptResponse<T>()
+            where T : class
+        {
+            _accept.Add(MessageUrn.ForTypeString<T>());
         }
     }
 
@@ -72,9 +100,10 @@ namespace Automatonymous.Requests
         where TResponse : class
         where TResponse2 : class
     {
-        public StateMachineRequest(string name, Expression<Func<TInstance, Guid?>> requestIdExpression, RequestSettings settings)
-            : base(name, requestIdExpression, settings)
+        public StateMachineRequest(string name, RequestSettings settings, Expression<Func<TInstance, Guid?>> requestIdExpression = default)
+            : base(name, settings, requestIdExpression)
         {
+            AcceptResponse<TResponse2>();
         }
 
         public Event<TResponse2> Completed2 { get; set; }

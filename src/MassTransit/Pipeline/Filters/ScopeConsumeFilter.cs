@@ -1,4 +1,4 @@
-﻿namespace MassTransit.Pipeline.Filters
+namespace MassTransit.Pipeline.Filters
 {
     using System.Threading.Tasks;
     using GreenPipes;
@@ -17,10 +17,9 @@
 
         public async Task Send(ConsumeContext context, IPipe<ConsumeContext> next)
         {
-            using (var scope = _scopeProvider.GetScope(context))
-            {
-                await next.Send(scope.Context).ConfigureAwait(false);
-            }
+            using var scope = _scopeProvider.GetScope(context);
+
+            await next.Send(scope.Context).ConfigureAwait(false);
         }
 
         public void Probe(ProbeContext context)

@@ -6,6 +6,7 @@ namespace MassTransit.RabbitMqTransport.Tests
 
 
     [TestFixture]
+    [Category("Flaky")]
     public class Using_the_reply_to_address :
         RabbitMqTestFixture
     {
@@ -19,17 +20,9 @@ namespace MassTransit.RabbitMqTransport.Tests
             Response<PongMessage> response = await client.GetResponse<PongMessage>(new PingMessage());
         }
 
-        [OneTimeSetUp]
-        public void Setup()
-        {
-        }
-
         protected override void ConfigureRabbitMqReceiveEndpoint(IRabbitMqReceiveEndpointConfigurator configurator)
         {
-            configurator.Handler<PingMessage>(x =>
-            {
-                return x.RespondAsync<PongMessage>(x.Message);
-            });
+            configurator.Handler<PingMessage>(x => x.RespondAsync<PongMessage>(x.Message));
         }
     }
 }

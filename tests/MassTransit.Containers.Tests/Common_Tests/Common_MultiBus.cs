@@ -3,12 +3,11 @@ namespace MassTransit.Containers.Tests.Common_Tests
     using System;
     using System.Collections.Generic;
     using System.Linq;
-    using System.Threading;
     using System.Threading.Tasks;
-    using Microsoft.Extensions.Diagnostics.HealthChecks;
     using Microsoft.Extensions.Hosting;
     using MultiBus;
     using NUnit.Framework;
+    using Registration;
     using Scenarios;
     using TestFramework;
     using TestFramework.Messages;
@@ -27,32 +26,87 @@ namespace MassTransit.Containers.Tests.Common_Tests
             await Task2.Task;
         }
 
+        [Test]
+        public void Should_resolve_bus_declaration()
+        {
+            Assert.NotNull(Registration.GetService<IBusOne>());
+            Assert.NotNull(Registration.GetService<IBusTwo>());
+        }
+
+        [Test]
+        public void Should_resolve_bus_instance()
+        {
+            Assert.NotNull(Registration.GetService<IBusInstance<IBusOne>>());
+            Assert.NotNull(Registration.GetService<IBusInstance<IBusTwo>>());
+        }
+
+        [Test]
+        public async Task Should_support_request_client_on_bus_one()
+        {
+            IRequestClient<OneRequest> client = GetRequestClient<OneRequest>();
+
+            await client.GetResponse<OneResponse>(new OneRequest());
+        }
+
+        [Test]
+        public async Task Should_support_request_client_on_bus_two()
+        {
+            IRequestClient<TwoRequest> client = GetRequestClient<TwoRequest>();
+
+            await client.GetResponse<TwoResponse>(new TwoRequest());
+        }
+
+        [Test]
+        public async Task Should_support_request_client_on_default_bus()
+        {
+            IRequestClient<Request> client = GetRequestClient<Request>();
+
+            await client.GetResponse<Response>(new Request());
+        }
+
         protected readonly TaskCompletionSource<ConsumeContext<SimpleMessageInterface>> Task1;
         protected readonly TaskCompletionSource<ConsumeContext<PingMessage>> Task2;
         protected abstract IBusOne One { get; }
-        protected abstract HealthCheckService HealthCheckService { get; }
         protected abstract IEnumerable<IHostedService> HostedServices { get; }
+
+        protected abstract IRequestClient<T> GetRequestClient<T>()
+            where T : class;
+
+        protected static void ConfigureRegistration(IRegistrationConfigurator configurator)
+        {
+            configurator.AddConsumer<RequestConsumer>();
+            configurator.AddRequestClient<Request>();
+        }
+
+        protected override void ConfigureInMemoryReceiveEndpoint(IInMemoryReceiveEndpointConfigurator configurator)
+        {
+            configurator.ConfigureConsumer<RequestConsumer>(Registration);
+        }
+
+        protected abstract IBusRegistrationContext Registration { get; }
 
         protected static void ConfigureOne(IBusRegistrationConfigurator configurator)
         {
             configurator.AddConsumer<Consumer1>();
+            configurator.AddConsumer<OneRequestConsumer>();
             configurator.UsingInMemory((context, cfg) =>
             {
                 cfg.Host(new Uri("loopback://bus-one/"));
                 cfg.ConfigureEndpoints(context);
-                cfg.UseHealthCheck(context);
             });
+            configurator.AddRequestClient<OneRequest>();
         }
 
         protected static void ConfigureTwo(IBusRegistrationConfigurator configurator)
         {
             configurator.AddConsumer<Consumer2>();
+            configurator.AddConsumer<TwoRequestConsumer>();
             configurator.UsingInMemory((context, cfg) =>
             {
                 cfg.Host(new Uri("loopback://bus-two/"));
                 cfg.ConfigureEndpoints(context);
-                cfg.UseHealthCheck(context);
             });
+            configurator.AddRequestClient<TwoRequest>();
         }
 
         protected Common_MultiBus()
@@ -64,24 +118,7 @@ namespace MassTransit.Containers.Tests.Common_Tests
         [OneTimeSetUp]
         public async Task Setup()
         {
-            var result = await HealthCheckService.CheckHealthAsync(TestCancellationToken);
-            Assert.That(result.Status == HealthStatus.Unhealthy);
-
             await Task.WhenAll(HostedServices.Select(x => x.StartAsync(TestCancellationToken)));
-
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            do
-            {
-                result = await HealthCheckService.CheckHealthAsync(TestCancellationToken);
-
-                Console.WriteLine("Health Check: {0}",
-                    string.Join(", ", result.Entries.Select(x => string.Join("=", x.Key, x.Value.Status))));
-
-                await Task.Delay(100, TestCancellationToken);
-            }
-            while (result.Status == HealthStatus.Unhealthy);
-
-            Assert.That(result.Status == HealthStatus.Healthy);
         }
 
         [OneTimeTearDown]
@@ -148,6 +185,66 @@ namespace MassTransit.Containers.Tests.Common_Tests
 
         public interface IBusTwo :
             IBus
+        {
+        }
+
+
+        class RequestConsumer :
+            IConsumer<Request>
+        {
+            public Task Consume(ConsumeContext<Request> context)
+            {
+                return context.RespondAsync(new Response());
+            }
+        }
+
+
+        public class Request
+        {
+        }
+
+
+        public class Response
+        {
+        }
+
+
+        class OneRequestConsumer :
+            IConsumer<OneRequest>
+        {
+            public Task Consume(ConsumeContext<OneRequest> context)
+            {
+                return context.RespondAsync(new OneResponse());
+            }
+        }
+
+
+        public class OneRequest
+        {
+        }
+
+
+        public class OneResponse
+        {
+        }
+
+
+        class TwoRequestConsumer :
+            IConsumer<TwoRequest>
+        {
+            public Task Consume(ConsumeContext<TwoRequest> context)
+            {
+                return context.RespondAsync(new TwoResponse());
+            }
+        }
+
+
+        public class TwoRequest
+        {
+        }
+
+
+        public class TwoResponse
         {
         }
     }

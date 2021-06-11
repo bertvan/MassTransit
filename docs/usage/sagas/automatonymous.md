@@ -75,7 +75,7 @@ public class OrderStateMachine :
 }
 ```
 
-This results in the following values: 0 - Initial, 1 - Final, 2 - Submitted, 3 - Accepted
+This results in the following values: 0 - None, 1 - Initial, 2 - Final, 3 - Submitted, 4 - Accepted
 
 ### State
 
@@ -277,9 +277,35 @@ public class OrderStateMachine :
 
 While the event is declared explicitly above, it is not required. The default convention will automatically configure events that have a `CorrelatedBy<Guid>` interface.
 
-> While convenient, some consider the interface an intrusion of infrastructure to the message contract.
+While convenient, some consider the interface an intrusion of infrastructure to the message contract. MassTransit also supports a declarative approach to specifying the `CorrelationId` for events. By configuring the global message topology, it is possible to specify a message property to use for correlation.
 
-An alternative is to declare the event correlation, as shown below.
+```cs
+public interface SubmitOrder
+{    
+    Guid OrderId { get; }
+}
+
+public class OrderStateMachine :
+    MassTransitStateMachine<OrderState>
+{
+    // this is shown here, but can be anywhere in the application as long as it executes
+    // before the state machine instance is created. Startup, etc. is a good place for it.
+    // It only needs to be called once per process.
+    static OrderStateMachine()
+    {
+        GlobalTopology.Send.UseCorrelationId<SubmitOrder>(x => x.OrderId);
+    }
+
+    public OrderStateMachine()
+    {
+        Event(() => SubmitOrder);
+    }
+
+    public Event<SubmitOrder> SubmitOrder { get; private set; }
+}
+```
+
+An alternative is to declare the event correlation, as shown below. This should be used when neither of the approaches above are used.
 
 ```cs
 public interface SubmitOrder
@@ -301,7 +327,11 @@ public class OrderStateMachine :
 
 Since `OrderId` is a `Guid`, it can be used for event correlation. When `SubmitOrder` is accepted in the _Initial_ state, and because the _OrderId_ is a _Guid_, the `CorrelationId` on the new instance is automatically assigned the _OrderId_ value.
 
-To correlate events using another type, additional configuration is required.
+Events can also be correlated using a query expression, which is required when events are not correlated to the instance's _CorrelationId_ property. Queries are more expensive, and may match multiple instances, which should be considered when designing state machines and events.
+
+> Whenever possible, try to correlation using the CorrelationId. If a query is required, it may be necessary to create an index on the property so that database queries are optimized.
+
+To correlate events using another type, additional configuration is required. 
 
 ```cs
 public interface ExternalOrderSubmitted
@@ -323,7 +353,33 @@ public class OrderStateMachine :
 }
 ```
 
+Queries can also be written with two arguments, which are passed directly to the repository (and must be supported by the backing database).
+
+```cs
+public interface ExternalOrderSubmitted
+{    
+    string OrderNumber { get; }
+}
+
+public class OrderStateMachine :
+    MassTransitStateMachine<OrderState>
+{
+    public OrderStateMachine()
+    {
+        Event(() => ExternalOrderSubmitted, e => e
+            .CorrelateBy((instance,context) => instance.OrderNumber == context.Message.OrderNumber)
+            .SelectId(x => NewId.NextGuid()));
+    }
+
+    public Event<ExternalOrderSubmitted> ExternalOrderSubmitted { get; private set; }
+}
+```
+
 When the event doesn't have a _Guid_ that uniquely correlates to an instance, the `.SelectId` expression must be configured. In the above example, [NewId](https://www.nuget.org/packages/NewId) is used to generate a sequential identifier which will be assigned to the instance _CorrelationId_. Any property on the event can be used to initialize the _CorrelationId_.
+
+::: warning
+Initial events that do not correlate on CorrelationId, and use `SelectId` to generate a _CorrelationId_ should use a unique constraint on the instance property (_OrderNumber_ in this example) to avoid duplicate instances. If two events correlate to the same property value at the same time, only one of the two will be able to store the instance, the other will fail (and, if retry is configured, which it should be when using a saga) and retry at which time the event will be dispatched based upon the current instance state (which is likely no longer Initial). Failure to apply a unique constraint (on _OrderNumber_ in this example) will result in duplicates.
+:::
 
 The message headers are also available, for example, instead of always generating a new identifier, the _CorrelationId_ header could be used if present.
 
@@ -870,11 +926,21 @@ public class OrderStateMachine :
 
 ### Request
 
-A request can be sent from a state machine using the _Request_ method. Defining a request includes specifying an instance property to store the _RequestId_ so that response event(s) can be correlated to the instance, as well as specifying a default request timeout.
+A request can be sent by a state machine using the _Request_ method, which specifies the request type and the response type. Additional request settings may be specified, including the _ServiceAddress_ and the _Timeout_. 
+
+If the _ServiceAddress_ is specified, it should be the endpoint address of the service that will respond to the request. If not specified, the request will be published.
+
+The default _Timeout_ is thirty seconds but any value greater than or equal to `TimeSpan.Zero` can be specified. When a request is sent with a timeout greater than zero, a _TimeoutExpired_ message is scheduled. Specifying `TimeSpan.Zero` will not schedule a timeout message and the request will never time out.
 
 ::: tip NOTE
-The bus must be configured to include a message scheduler to use the request activities. See the [scheduling](/advanced/scheduling/) section to learn how to setup a message scheduler.
+When a _Timeout_ greater than `Timespan.Zero` is configured, a message scheduler must be configured. See the [scheduling](/advanced/scheduling/) section for details on configuring a message scheduler.
 :::
+
+When defining a `Request`, an instance property _should_ be specified to store the _RequestId_ which is used to correlate responses to the state machine instance. While the request is pending, the _RequestId_ is stored in the property. When the request has completed the property is cleared. If the request times out or faults, the _RequestId_ is retained to allow for later correlation if requests are ultimately completed (such as moving requests from the *_error* queue back into the service queue).
+
+A recent enhancement making this property optional, instead using the instance's `CorrelationId` for the request message `RequestId`. This can simplify response correlation, and also avoids the need of a supplemental index on the saga repository. However, reusing the `CorrelationId` for the request might cause issues in highly complex systems. So consider this when choosing which method to use.
+
+#### Configuration
 
 To declare a request, add a `Request` property and configure it using the `Request` method.
 
@@ -905,11 +971,13 @@ public class OrderStateMachine :
 {
     public OrderStateMachine(OrderStateMachineSettings settings)
     {
-        Request(() => ProcessOrder, x => x.ProcessOrderRequestId, r =>
-        {
-            r.ServiceAddress = settings.ProcessOrderServiceAddress;
-            r.Timeout = settings.RequestTimeout;
-        });
+        Request(
+            () => ProcessOrder,
+            x => x.ProcessOrderRequestId, // Optional
+            r => {
+                r.ServiceAddress = settings.ProcessOrderServiceAddress;
+                r.Timeout = settings.RequestTimeout;
+            });
     }
 
     public Request<OrderState, ProcessOrder, OrderProcessed> ProcessOrder { get; private set; }
@@ -945,7 +1013,7 @@ public class OrderStateMachine :
 }
 ```
 
-The _Request_ includes three events: _Completed, _Faulted_, and _TimeoutExpired_. These events can be consumed during any state, however, the _Request_ includes a _Pending_ state which can be used to avoid declaring a separate pending state. 
+The _Request_ includes three events: _Completed, _Faulted_, and _TimeoutExpired_. These events can be consumed during any state, however, the _Request_ includes a _Pending_ state which can be used to avoid declaring a separate pending state.
 
 ::: tip NOTE
 The request timeout is scheduled using the message scheduler, and the scheduled message is canceled when a response or fault is received. Not all message schedulers support cancellation, so it may be necessary to _Ignore_ the `TimeoutExpired` event in subsequent states.

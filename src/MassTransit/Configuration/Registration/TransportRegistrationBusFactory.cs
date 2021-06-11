@@ -4,13 +4,16 @@ namespace MassTransit.Registration
     using System.Collections.Generic;
     using System.Linq;
     using Configuration;
+    using Configurators;
     using Context;
+    using GreenPipes;
     using Microsoft.Extensions.Logging;
-    using Riders;
+    using Util;
 
 
-    public abstract class TransportRegistrationBusFactory :
+    public abstract class TransportRegistrationBusFactory<TEndpointConfigurator> :
         IRegistrationBusFactory
+        where TEndpointConfigurator : class, IReceiveEndpointConfigurator
     {
         readonly IHostConfiguration _hostConfiguration;
 
@@ -29,24 +32,51 @@ namespace MassTransit.Registration
             var loggerFactory = context.GetService<ILoggerFactory>();
             if (loggerFactory != null)
                 LogContext.ConfigureCurrentLogContext(loggerFactory);
+            else if (LogContext.Current == null)
+                LogContext.ConfigureCurrentLogContext();
 
-            context.UseHealthCheck(configurator);
-
-            var riders = new RiderConnectable();
-            configurator.ConnectBusObserver(new RiderBusObserver(riders));
+            _hostConfiguration.LogContext = LogContext.Current;
 
             configure?.Invoke(context, configurator);
 
             specifications ??= Enumerable.Empty<IBusInstanceSpecification>();
 
-            var busControl = configurator.Build(specifications);
+            IEnumerable<IBusInstanceSpecification> busInstanceSpecifications = specifications as IBusInstanceSpecification[] ?? specifications.ToArray();
 
-            var instance = new TransportBusInstance(busControl, _hostConfiguration, riders);
+            IEnumerable<ValidationResult> validationResult = configurator.Validate()
+                .Concat(busInstanceSpecifications.SelectMany(x => x.Validate()));
 
-            foreach (var specification in specifications)
-                specification.Configure(instance);
+            var result = BusConfigurationResult.CompileResults(validationResult);
 
-            return instance;
+            try
+            {
+                var busReceiveEndpointConfiguration = configurator.CreateBusEndpointConfiguration(x => x.ConfigureConsumeTopology = false);
+
+                var host = _hostConfiguration.Build() as IHost<TEndpointConfigurator>;
+
+                var bus = new MassTransitBus(host, _hostConfiguration.BusConfiguration.BusObservers, busReceiveEndpointConfiguration);
+
+                TaskUtil.Await(() => _hostConfiguration.BusConfiguration.BusObservers.PostCreate(bus));
+
+                IBusInstance instance = CreateBusInstance(bus, host, _hostConfiguration, context);
+
+                foreach (var specification in busInstanceSpecifications)
+                    specification.Configure(instance);
+
+                return instance;
+            }
+            catch (Exception ex)
+            {
+                TaskUtil.Await(() => _hostConfiguration.BusConfiguration.BusObservers.CreateFaulted(ex));
+
+                throw new ConfigurationException(result, "An exception occurred during bus creation", ex);
+            }
+        }
+
+        protected virtual IBusInstance CreateBusInstance(IBusControl bus, IHost<TEndpointConfigurator> host, IHostConfiguration hostConfiguration,
+            IBusRegistrationContext context)
+        {
+            return new TransportBusInstance<TEndpointConfigurator>(bus, host, hostConfiguration, context);
         }
     }
 }

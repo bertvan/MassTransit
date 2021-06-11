@@ -3,6 +3,7 @@
     using System;
     using System.Collections.Generic;
     using System.Globalization;
+    using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
     using Context;
@@ -42,9 +43,11 @@
             if (IsStopped)
                 throw new TransportUnavailableException($"The RabbitMQ send transport is stopped: {_context.Exchange}");
 
+            LogContext.SetCurrentIfNull(_context.LogContext);
+
             var sendPipe = new SendPipe<T>(_context, message, pipe, cancellationToken);
 
-            return _context.ModelContextSupervisor.Send(sendPipe, cancellationToken);
+            return _context.Send(sendPipe, cancellationToken);
         }
 
         public ConnectHandle ConnectSendObserver(ISendObserver observer)
@@ -54,7 +57,7 @@
 
         protected override Task StopSupervisor(StopSupervisorContext context)
         {
-            LogContext.Debug?.Log("Stopping send transport: {Exchange}", _context.Exchange);
+            TransportLogMessages.StoppingSendTransport(_context.Exchange);
 
             return base.StopSupervisor(context);
         }
@@ -80,8 +83,6 @@
 
             public async Task Send(ModelContext modelContext)
             {
-                LogContext.SetCurrentIfNull(_context.LogContext);
-
                 await _context.ConfigureTopologyPipe.Send(modelContext).ConfigureAwait(false);
 
                 var properties = modelContext.Model.CreateBasicProperties();
@@ -105,7 +106,7 @@
                     if (_context.SendObservers.Count > 0)
                         await _context.SendObservers.PreSend(context).ConfigureAwait(false);
 
-                    byte[] body = context.Body;
+                    var body = context.Body;
 
                     if (context.TryGetPayload(out PublishContext publishContext))
                         context.Mandatory = context.Mandatory || publishContext.Mandatory;
@@ -135,12 +136,22 @@
                     if (context.RequestId.HasValue && (context.ResponseAddress?.AbsolutePath?.EndsWith(RabbitMqExchangeNames.ReplyTo) ?? false))
                         context.BasicProperties.ReplyTo = RabbitMqExchangeNames.ReplyTo;
 
+                    var delay = context.Delay?.TotalMilliseconds;
+                    if (delay > 0 && exchange != "")
+                    {
+                        await _context.DelayConfigureTopologyPipe.Send(modelContext).ConfigureAwait(false);
+                        context.SetTransportHeader("x-delay", (long)delay.Value);
+
+                        exchange = _context.DelayExchange;
+                    }
+
                     var publishTask = modelContext.BasicPublishAsync(exchange, context.RoutingKey ?? "", context.Mandatory, context.BasicProperties, body,
                         context.AwaitAck);
 
                     await publishTask.OrCanceled(context.CancellationToken).ConfigureAwait(false);
 
                     context.LogSent();
+                    activity.AddSendContextHeadersPostSend(context);
 
                     if (_context.SendObservers.Count > 0)
                         await _context.SendObservers.PostSend(context).ConfigureAwait(false);
@@ -197,8 +208,20 @@
 
                             break;
 
+                        case string value when header.Key == "CC" || header.Key == "BCC":
+                            dictionary[header.Key] = new[] {value};
+                            break;
+
+                        case IEnumerable<string> strings when header.Key == "CC" || header.Key == "BCC":
+                            dictionary[header.Key] = strings.ToArray();
+                            break;
+
                         case string value:
                             dictionary[header.Key] = value;
+                            break;
+
+                        case bool value when value:
+                            dictionary[header.Key] = bool.TrueString;
                             break;
 
                         case IFormattable formatValue:

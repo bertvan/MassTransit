@@ -1,10 +1,11 @@
 namespace MassTransit.Transports.InMemory.Builders
 {
     using Configuration;
-    using Context;
     using Contexts;
     using GreenPipes;
     using MassTransit.Builders;
+    using Pipeline;
+    using Topology.Configurators;
 
 
     public class InMemoryReceiveEndpointBuilder :
@@ -20,31 +21,25 @@ namespace MassTransit.Transports.InMemory.Builders
             _configuration = configuration;
         }
 
-        public override ConnectHandle ConnectConsumePipe<T>(IPipe<ConsumeContext<T>> pipe)
+        public override ConnectHandle ConnectConsumePipe<T>(IPipe<ConsumeContext<T>> pipe, ConnectPipeOptions options)
         {
-            _configuration.Topology.Consume
-                .GetMessageTopology<T>()
-                .Bind();
+            if (_configuration.ConfigureConsumeTopology && options.HasFlag(ConnectPipeOptions.ConfigureConsumeTopology))
+            {
+                IInMemoryMessageConsumeTopologyConfigurator<T> topology = _configuration.Topology.Consume.GetMessageTopology<T>();
+                if (topology.ConfigureConsumeTopology)
+                    topology.Bind();
+            }
 
-            return base.ConnectConsumePipe(pipe);
+            return base.ConnectConsumePipe(pipe, options);
         }
 
-        public ReceiveEndpointContext CreateReceiveEndpointContext()
+        public InMemoryReceiveEndpointContext CreateReceiveEndpointContext()
         {
-            var builder = _hostConfiguration.TransportProvider.CreateConsumeTopologyBuilder();
-
-            var queueName = _configuration.InputAddress.GetQueueOrExchangeName();
-
-            builder.Queue = queueName;
-            builder.QueueDeclare(queueName, _configuration.ConcurrencyLimit);
-            builder.Exchange = queueName;
-            builder.QueueBind(builder.Exchange, builder.Queue);
-
-            _configuration.Topology.Consume.Apply(builder);
-
-            var context = new InMemoryReceiveEndpointContext(_hostConfiguration, _configuration);
+            var context = new TransportInMemoryReceiveEndpointContext(_hostConfiguration, _configuration);
 
             context.GetOrAddPayload(() => _hostConfiguration.HostTopology);
+
+            context.ConfigureTopology();
 
             return context;
         }

@@ -16,20 +16,20 @@ namespace MassTransit.QuartzIntegration.Tests
         {
             var accountId = NewId.NextGuid();
 
-            Task<ConsumeContext<AccountOpened>> opened = ConnectPublishHandler<AccountOpened>(x => x.Message.AccountId == accountId);
-            Task<ConsumeContext<AccountDefaulted>> defaulted = ConnectPublishHandler<AccountDefaulted>(x => x.Message.AccountId == accountId);
-            Task<ConsumeContext<AccountClosed>> closed = ConnectPublishHandler<AccountClosed>(x => x.Message.AccountId == accountId);
+            Task<ConsumeContext<AccountOpened>> opened = await ConnectPublishHandler<AccountOpened>(x => x.Message.AccountId == accountId);
+            Task<ConsumeContext<AccountDefaulted>> defaulted = await ConnectPublishHandler<AccountDefaulted>(x => x.Message.AccountId == accountId);
+            Task<ConsumeContext<AccountClosed>> closed = await ConnectPublishHandler<AccountClosed>(x => x.Message.AccountId == accountId);
 
             await InputQueueSendEndpoint.Send<OpenAccount>(new {AccountId = accountId});
 
             await opened;
             await Task.Delay(1000);
 
-            AdvanceTime(TimeSpan.FromDays(30));
+            await AdvanceTime(TimeSpan.FromDays(30));
 
             await defaulted;
 
-            AdvanceTime(TimeSpan.FromDays(60));
+            await AdvanceTime(TimeSpan.FromDays(60));
 
             await closed;
         }

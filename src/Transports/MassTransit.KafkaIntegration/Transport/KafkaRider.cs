@@ -6,26 +6,32 @@ namespace MassTransit.KafkaIntegration.Transport
     using System.Threading;
     using System.Threading.Tasks;
     using Confluent.Kafka;
-    using Pipeline.Observables;
+    using Contexts;
+    using GreenPipes;
+    using GreenPipes.Agents;
+    using MassTransit.Registration;
     using Riders;
+    using Transports;
     using Util;
 
 
     public class KafkaRider :
-        BaseRider,
         IKafkaRider
     {
-        readonly IKafkaReceiveEndpoint[] _endpoints;
-        readonly Uri _hostAddress;
-        readonly Dictionary<Uri, IKafkaProducerFactory> _producerFactories;
+        readonly IBusInstance _busInstance;
+        readonly IReceiveEndpointCollection _endpoints;
+        readonly IKafkaHostConfiguration _hostConfiguration;
+        readonly ITopicProducerProvider _producerProvider;
+        readonly IRiderRegistrationContext _registrationContext;
 
-        public KafkaRider(Uri hostAddress, IEnumerable<IKafkaReceiveEndpoint> endpoints, IEnumerable<IKafkaProducerFactory> producerFactories,
-            RiderObservable observers)
-            : base("confluent.kafka", observers)
+        public KafkaRider(IKafkaHostConfiguration hostConfiguration, IBusInstance busInstance, IReceiveEndpointCollection endpoints,
+            ITopicProducerProvider producerProvider, IRiderRegistrationContext registrationContext)
         {
-            _hostAddress = hostAddress;
-            _endpoints = endpoints?.ToArray() ?? Array.Empty<IKafkaReceiveEndpoint>();
-            _producerFactories = producerFactories.ToDictionary(x => x.TopicAddress);
+            _hostConfiguration = hostConfiguration;
+            _busInstance = busInstance;
+            _endpoints = endpoints;
+            _producerProvider = producerProvider;
+            _registrationContext = registrationContext;
         }
 
         public ITopicProducer<TKey, TValue> GetProducer<TKey, TValue>(Uri address, ConsumeContext consumeContext)
@@ -34,40 +40,106 @@ namespace MassTransit.KafkaIntegration.Transport
             if (address == null)
                 throw new ArgumentNullException(nameof(address));
 
-            var topicAddress = new KafkaTopicAddress(_hostAddress, address);
+            var provider = consumeContext == null
+                ? _producerProvider
+                : new ConsumeContextTopicProducerProvider(_producerProvider, consumeContext);
 
-            KafkaProducerFactory<TKey, TValue> factory = GetProducerFactory<TKey, TValue>(topicAddress);
-
-            return factory.CreateProducer(consumeContext);
+            return provider.GetProducer<TKey, TValue>(address);
         }
 
-        KafkaProducerFactory<TKey, TValue> GetProducerFactory<TKey, TValue>(Uri topicAddress)
+        public HostReceiveEndpointHandle ConnectTopicEndpoint<TKey, TValue>(string topicName, string groupId,
+            Action<IRiderRegistrationContext, IKafkaTopicReceiveEndpointConfigurator<TKey, TValue>> configure)
             where TValue : class
         {
-            if (!_producerFactories.TryGetValue(topicAddress, out var factory))
-                throw new ConfigurationException($"Producer for topic: {topicAddress} is not configured.");
+            var specification = _hostConfiguration.CreateSpecification<TKey, TValue>(topicName, groupId, configurator =>
+            {
+                configure?.Invoke(_registrationContext, configurator);
+            });
 
-            if (factory is KafkaProducerFactory<TKey, TValue> producerFactory)
-                return producerFactory;
+            _endpoints.Add(specification.EndpointName, specification.CreateReceiveEndpoint(_busInstance));
 
-            throw new ConfigurationException($"Producer for topic: {topicAddress} is not configured for ${typeof(Message<TKey, TValue>).Name} message");
+            return _endpoints.Start(specification.EndpointName);
         }
 
-        protected override Task StartRider(CancellationToken cancellationToken)
+        public HostReceiveEndpointHandle ConnectTopicEndpoint<TKey, TValue>(string topicName, ConsumerConfig consumerConfig,
+            Action<IRiderRegistrationContext, IKafkaTopicReceiveEndpointConfigurator<TKey, TValue>> configure)
+            where TValue : class
         {
-            if (!_endpoints.Any())
-                return TaskUtil.Completed;
+            var specification = _hostConfiguration.CreateSpecification<TKey, TValue>(topicName, consumerConfig, configurator =>
+            {
+                configure?.Invoke(_registrationContext, configurator);
+            });
 
-            return Task.WhenAll(_endpoints.Select(endpoint => endpoint.Start(cancellationToken)));
+            _endpoints.Add(specification.EndpointName, specification.CreateReceiveEndpoint(_busInstance));
+
+            return _endpoints.Start(specification.EndpointName);
         }
 
-        protected override async Task StopRider(CancellationToken cancellationToken)
+        public RiderHandle Start(CancellationToken cancellationToken = default)
         {
-            if (_endpoints.Any())
-                await Task.WhenAll(_endpoints.Select(endpoint => endpoint.Stop())).ConfigureAwait(false);
+            HostReceiveEndpointHandle[] endpointsHandle = _endpoints.StartEndpoints(cancellationToken);
 
-            foreach (var factory in _producerFactories.Values)
-                factory.Dispose();
+            var ready = endpointsHandle.Length == 0 ? TaskUtil.Completed : _hostConfiguration.ClientContextSupervisor.Ready;
+
+            var agent = new RiderAgent(_hostConfiguration.ClientContextSupervisor, _endpoints, ready);
+
+            return new Handle(endpointsHandle, agent);
+        }
+
+
+        class RiderAgent :
+            Agent
+        {
+            readonly IReceiveEndpointCollection _endpoints;
+            readonly IClientContextSupervisor _supervisor;
+
+            public RiderAgent(IClientContextSupervisor supervisor, IReceiveEndpointCollection endpoints, Task ready)
+            {
+                _supervisor = supervisor;
+                _endpoints = endpoints;
+
+                SetReady(ready);
+                SetCompleted(_supervisor.Completed);
+            }
+
+            protected override async Task StopAgent(StopContext context)
+            {
+                await _endpoints.Stop(context.CancellationToken).ConfigureAwait(false);
+                await _supervisor.Stop(context).ConfigureAwait(false);
+                await base.StopAgent(context).ConfigureAwait(false);
+            }
+        }
+
+
+        class Handle :
+            RiderHandle
+        {
+            readonly IAgent _agent;
+            readonly HostReceiveEndpointHandle[] _endpoints;
+
+            public Handle(HostReceiveEndpointHandle[] endpoints, IAgent agent)
+            {
+                _endpoints = endpoints;
+                _agent = agent;
+            }
+
+            public Task Ready => ReadyOrNot(_endpoints.Select(x => x.Ready));
+
+            public Task StopAsync(CancellationToken cancellationToken)
+            {
+                return _agent.Stop("Kafka stopped", cancellationToken);
+            }
+
+            async Task ReadyOrNot(IEnumerable<Task<ReceiveEndpointReady>> endpoints)
+            {
+                Task<ReceiveEndpointReady>[] readyTasks = endpoints as Task<ReceiveEndpointReady>[] ?? endpoints.ToArray();
+                foreach (Task<ReceiveEndpointReady> ready in readyTasks)
+                    await ready.ConfigureAwait(false);
+
+                await _agent.Ready.ConfigureAwait(false);
+
+                await Task.WhenAll(readyTasks).ConfigureAwait(false);
+            }
         }
     }
 }

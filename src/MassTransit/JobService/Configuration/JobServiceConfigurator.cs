@@ -4,9 +4,9 @@ namespace MassTransit.JobService.Configuration
     using System.Collections.Generic;
     using Components;
     using Components.StateMachines;
-    using Conductor;
+    using Contracts.JobService;
     using GreenPipes;
-    using MassTransit.Contracts.JobService;
+    using GreenPipes.Partitioning;
     using Saga;
 
 
@@ -15,7 +15,7 @@ namespace MassTransit.JobService.Configuration
         ISpecification
         where TReceiveEndpointConfigurator : IReceiveEndpointConfigurator
     {
-        readonly IServiceInstanceConfigurator<TReceiveEndpointConfigurator> _instanceConfigurator;
+        readonly IBusFactoryConfigurator<TReceiveEndpointConfigurator> _busConfigurator;
         readonly JobServiceOptions _options;
         bool _endpointsConfigured;
         ISagaRepository<JobAttemptSaga> _jobAttemptRepository;
@@ -25,23 +25,36 @@ namespace MassTransit.JobService.Configuration
         ISagaRepository<JobTypeSaga> _jobTypeRepository;
         IReceiveEndpointConfigurator _jobTypeSagaEndpointConfigurator;
 
-        public JobServiceConfigurator(IServiceInstanceConfigurator<TReceiveEndpointConfigurator> instanceConfigurator)
+        public JobServiceConfigurator(IServiceInstanceConfigurator<TReceiveEndpointConfigurator> instanceConfigurator, JobServiceOptions options = null)
         {
-            _instanceConfigurator = instanceConfigurator;
+            _busConfigurator = instanceConfigurator.BusConfigurator;
 
-            JobService = new JobService(_instanceConfigurator.InstanceAddress);
+            _options = options != null
+                ? instanceConfigurator.Options(options)
+                : instanceConfigurator.Options<JobServiceOptions>();
 
-            instanceConfigurator.ConnectBusObserver(new JobServiceBusObserver(JobService));
+            JobService = new JobService(instanceConfigurator.InstanceAddress, _options);
+
+            instanceConfigurator.BusConfigurator.ConnectBusObserver(new JobServiceBusObserver(JobService));
             instanceConfigurator.AddSpecification(this);
 
-            _options = _instanceConfigurator.Options<JobServiceOptions>(options =>
-            {
-                options.JobService = JobService;
 
-                options.JobTypeSagaEndpointName = _instanceConfigurator.EndpointNameFormatter.Saga<JobTypeSaga>();
-                options.JobStateSagaEndpointName = _instanceConfigurator.EndpointNameFormatter.Saga<JobSaga>();
-                options.JobAttemptSagaEndpointName = _instanceConfigurator.EndpointNameFormatter.Saga<JobAttemptSaga>();
-            });
+            _options.JobService = JobService;
+            _options.InstanceEndpointConfigurator = instanceConfigurator.InstanceEndpointConfigurator;
+
+            _options.JobTypeSagaEndpointName = instanceConfigurator.EndpointNameFormatter.Saga<JobTypeSaga>();
+            _options.JobStateSagaEndpointName = instanceConfigurator.EndpointNameFormatter.Saga<JobSaga>();
+            _options.JobAttemptSagaEndpointName = instanceConfigurator.EndpointNameFormatter.Saga<JobAttemptSaga>();
+
+            instanceConfigurator.ConnectEndpointConfigurationObserver(new JobServiceEndpointConfigurationObserver(_options, cfg =>
+            {
+                if (_jobTypeSagaEndpointConfigurator != null)
+                    cfg.AddDependency(_jobTypeSagaEndpointConfigurator);
+                if (_jobSagaEndpointConfigurator != null)
+                    cfg.AddDependency(_jobSagaEndpointConfigurator);
+                if (_jobAttemptSagaEndpointConfigurator != null)
+                    cfg.AddDependency(_jobAttemptSagaEndpointConfigurator);
+            }));
         }
 
         IJobService JobService { get; }
@@ -96,6 +109,22 @@ namespace MassTransit.JobService.Configuration
             set => _options.StartJobTimeout = value;
         }
 
+        public int SuspectJobRetryCount
+        {
+            set => _options.SuspectJobRetryCount = value;
+        }
+
+        public TimeSpan SuspectJobRetryDelay
+        {
+            set
+            {
+                if (value <= TimeSpan.Zero)
+                    throw new ArgumentOutOfRangeException(nameof(value), "The delay must be > TimeSpan.Zero");
+
+                _options.SuspectJobRetryDelay = value;
+            }
+        }
+
         public int? SagaPartitionCount
         {
             set => _options.SagaPartitionCount = value;
@@ -113,109 +142,97 @@ namespace MassTransit.JobService.Configuration
             return turnoutOptions.Validate();
         }
 
-        public void ApplyJobServiceOptions(JobServiceOptions jobServiceOptions)
-        {
-            _options.Set(jobServiceOptions);
-        }
-
         public void ConfigureJobServiceEndpoints()
         {
             if (_endpointsConfigured)
                 return;
 
-            _instanceConfigurator.ReceiveEndpoint(_options.JobStateSagaEndpointName, e =>
+            _busConfigurator.ReceiveEndpoint(_options.JobStateSagaEndpointName, e =>
             {
                 e.UseMessageRetry(r => r.Intervals(100, 1000, 2000, 5000));
                 e.UseInMemoryOutbox();
+
+                if (_options.SagaPartitionCount.HasValue)
+                {
+                    var partition = new Partitioner(_options.SagaPartitionCount.Value, new Murmur3UnsafeHashGenerator());
+
+                    e.UsePartitioner<JobSubmitted>(partition, p => p.Message.JobId);
+
+                    e.UsePartitioner<JobSlotAllocated>(partition, p => p.Message.JobId);
+                    e.UsePartitioner<JobSlotUnavailable>(partition, p => p.Message.JobId);
+                    e.UsePartitioner<Fault<AllocateJobSlot>>(partition, p => p.Message.Message.JobId);
+
+                    e.UsePartitioner<JobAttemptCreated>(partition, p => p.Message.JobId);
+                    e.UsePartitioner<Fault<StartJobAttempt>>(partition, p => p.Message.Message.JobId);
+
+                    e.UsePartitioner<JobAttemptCanceled>(partition, p => p.Message.JobId);
+                    e.UsePartitioner<JobAttemptCompleted>(partition, p => p.Message.JobId);
+                    e.UsePartitioner<JobAttemptFaulted>(partition, p => p.Message.JobId);
+                    e.UsePartitioner<JobAttemptStarted>(partition, p => p.Message.JobId);
+
+                    e.UsePartitioner<JobSlotWaitElapsed>(partition, p => p.Message.JobId);
+                    e.UsePartitioner<JobRetryDelayElapsed>(partition, p => p.Message.JobId);
+                }
 
                 var stateMachine = new JobStateMachine(_options);
-
-                e.StateMachineSaga(stateMachine, _jobRepository ?? new InMemorySagaRepository<JobSaga>(), x =>
-                {
-                    if (_options.SagaPartitionCount.HasValue)
-                    {
-                        var partition = e.CreatePartitioner(_options.SagaPartitionCount.Value);
-
-                        x.Message<JobSubmitted>(m => m.UsePartitioner(partition, p => p.Message.JobId.ToByteArray()));
-
-                        x.Message<JobSlotAllocated>(m => m.UsePartitioner(partition, p => p.Message.JobId.ToByteArray()));
-                        x.Message<JobSlotUnavailable>(m => m.UsePartitioner(partition, p => p.Message.JobId.ToByteArray()));
-                        x.Message<Fault<AllocateJobSlot>>(m => m.UsePartitioner(partition, p => p.Message.Message.JobId.ToByteArray()));
-
-                        x.Message<JobAttemptCreated>(m => m.UsePartitioner(partition, p => p.Message.JobId.ToByteArray()));
-                        x.Message<Fault<StartJobAttempt>>(m => m.UsePartitioner(partition, p => p.Message.Message.JobId.ToByteArray()));
-
-                        x.Message<JobAttemptCanceled>(m => m.UsePartitioner(partition, p => p.Message.JobId.ToByteArray()));
-                        x.Message<JobAttemptCompleted>(m => m.UsePartitioner(partition, p => p.Message.JobId.ToByteArray()));
-                        x.Message<JobAttemptFaulted>(m => m.UsePartitioner(partition, p => p.Message.JobId.ToByteArray()));
-                        x.Message<JobAttemptStarted>(m => m.UsePartitioner(partition, p => p.Message.JobId.ToByteArray()));
-
-                        x.Message<JobSlotWaitElapsed>(m => m.UsePartitioner(partition, p => p.Message.JobId.ToByteArray()));
-                        x.Message<JobRetryDelayElapsed>(m => m.UsePartitioner(partition, p => p.Message.JobId.ToByteArray()));
-                    }
-                });
-
+                e.StateMachineSaga(stateMachine, _jobRepository ?? new InMemorySagaRepository<JobSaga>());
 
                 _jobSagaEndpointConfigurator = e;
+
+                _options.JobSagaEndpointAddress = e.InputAddress;
             });
 
-            _instanceConfigurator.ReceiveEndpoint(_options.JobAttemptSagaEndpointName, e =>
+            _busConfigurator.ReceiveEndpoint(_options.JobAttemptSagaEndpointName, e =>
             {
                 e.UseMessageRetry(r => r.Intervals(100, 1000, 2000, 5000));
                 e.UseInMemoryOutbox();
 
-                var stateMachine = new JobAttemptStateMachine(_options);
-
-                e.StateMachineSaga(stateMachine, _jobAttemptRepository ?? new InMemorySagaRepository<JobAttemptSaga>(), x =>
+                if (_options.SagaPartitionCount.HasValue)
                 {
-                    if (_options.SagaPartitionCount.HasValue)
-                    {
-                        var partition = e.CreatePartitioner(_options.SagaPartitionCount.Value);
+                    var partition = new Partitioner(_options.SagaPartitionCount.Value, new Murmur3UnsafeHashGenerator());
 
-                        x.Message<StartJobAttempt>(m => m.UsePartitioner(partition, p => p.Message.AttemptId.ToByteArray()));
-                        x.Message<Fault<StartJob>>(m => m.UsePartitioner(partition, p => p.Message.Message.AttemptId.ToByteArray()));
+                    e.UsePartitioner<StartJobAttempt>(partition, p => p.Message.AttemptId);
+                    e.UsePartitioner<Fault<StartJob>>(partition, p => p.Message.Message.AttemptId);
 
-                        x.Message<JobAttemptStarted>(m => m.UsePartitioner(partition, p => p.Message.AttemptId.ToByteArray()));
-                        x.Message<JobAttemptCompleted>(m => m.UsePartitioner(partition, p => p.Message.AttemptId.ToByteArray()));
-                        x.Message<JobAttemptCanceled>(m => m.UsePartitioner(partition, p => p.Message.AttemptId.ToByteArray()));
-                        x.Message<JobAttemptFaulted>(m => m.UsePartitioner(partition, p => p.Message.AttemptId.ToByteArray()));
+                    e.UsePartitioner<JobAttemptStarted>(partition, p => p.Message.AttemptId);
+                    e.UsePartitioner<JobAttemptCompleted>(partition, p => p.Message.AttemptId);
+                    e.UsePartitioner<JobAttemptCanceled>(partition, p => p.Message.AttemptId);
+                    e.UsePartitioner<JobAttemptFaulted>(partition, p => p.Message.AttemptId);
 
-                        x.Message<JobAttemptStatus>(m => m.UsePartitioner(partition, p => p.Message.AttemptId.ToByteArray()));
-                        x.Message<JobStatusCheckRequested>(m => m.UsePartitioner(partition, p => p.Message.AttemptId.ToByteArray()));
-                    }
-                });
+                    e.UsePartitioner<JobAttemptStatus>(partition, p => p.Message.AttemptId);
+                    e.UsePartitioner<JobStatusCheckRequested>(partition, p => p.Message.AttemptId);
+                }
+
+                var stateMachine = new JobAttemptStateMachine(_options);
+                e.StateMachineSaga(stateMachine, _jobAttemptRepository ?? new InMemorySagaRepository<JobAttemptSaga>());
 
                 _jobAttemptSagaEndpointConfigurator = e;
+
+                _options.JobAttemptSagaEndpointAddress = e.InputAddress;
             });
 
-            _instanceConfigurator.ReceiveEndpoint(_options.JobTypeSagaEndpointName, e =>
+            _busConfigurator.ReceiveEndpoint(_options.JobTypeSagaEndpointName, e =>
             {
                 e.UseMessageRetry(r => r.Intervals(100, 200, 300, 500, 1000, 2000, 5000));
                 e.UseInMemoryOutbox();
 
-                var stateMachine = new JobTypeStateMachine();
-
-                e.StateMachineSaga(stateMachine, _jobTypeRepository ?? new InMemorySagaRepository<JobTypeSaga>(), x =>
+                if (_options.SagaPartitionCount.HasValue)
                 {
-                    if (_options.SagaPartitionCount.HasValue)
-                    {
-                        var partition = e.CreatePartitioner(_options.SagaPartitionCount.Value);
+                    var partition = new Partitioner(_options.SagaPartitionCount.Value, new Murmur3UnsafeHashGenerator());
 
-                        x.Message<AllocateJobSlot>(m => m.UsePartitioner(partition, p => p.Message.JobTypeId.ToByteArray()));
-                        x.Message<JobSlotReleased>(m => m.UsePartitioner(partition, p => p.Message.JobTypeId.ToByteArray()));
-                        x.Message<SetConcurrentJobLimit>(m => m.UsePartitioner(partition, p => p.Message.JobTypeId.ToByteArray()));
-                    }
-                });
+                    e.UsePartitioner<AllocateJobSlot>(partition, p => p.Message.JobTypeId);
+                    e.UsePartitioner<JobSlotReleased>(partition, p => p.Message.JobTypeId);
+                    e.UsePartitioner<SetConcurrentJobLimit>(partition, p => p.Message.JobTypeId);
+                }
+
+                var stateMachine = new JobTypeStateMachine(_options);
+
+                e.StateMachineSaga(stateMachine, _jobTypeRepository ?? new InMemorySagaRepository<JobTypeSaga>());
 
                 _jobTypeSagaEndpointConfigurator = e;
-            });
 
-            _instanceConfigurator.ConnectEndpointConfigurationObserver(new JobServiceEndpointConfigurationObserver(_options, cfg =>
-            {
-                cfg.AddDependency(_jobTypeSagaEndpointConfigurator);
-                cfg.AddDependency(_jobSagaEndpointConfigurator);
-                cfg.AddDependency(_jobAttemptSagaEndpointConfigurator);
-            }));
+                _options.JobTypeSagaEndpointAddress = e.InputAddress;
+            });
 
             _endpointsConfigured = true;
         }

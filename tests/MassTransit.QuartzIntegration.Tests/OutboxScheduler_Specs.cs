@@ -20,7 +20,7 @@
         [Test]
         public async Task Should_cancel_the_message()
         {
-            Task<ConsumeContext<Fault<PingMessage>>> faulted = ConnectPublishHandler<Fault<PingMessage>>();
+            Task<ConsumeContext<Fault<PingMessage>>> faulted = await ConnectPublishHandler<Fault<PingMessage>>();
 
             await InputQueueSendEndpoint.Send(new PingMessage());
 
@@ -33,11 +33,12 @@
             LogContext.Debug?.Log("Pong was scheduled");
 
             await faulted;
-            await Task.Delay(1000);
 
-            AdvanceTime(TimeSpan.FromSeconds(20));
+            await InMemoryTestHarness.Consumed.Any<CancelScheduledMessage>();
 
-            Assert.That(async () => await _pongReceived.Task.OrTimeout(s: 5), Throws.TypeOf<TimeoutException>());
+            await AdvanceTime(TimeSpan.FromSeconds(20));
+
+            Assert.That(async () => await _pongReceived.Task.OrTimeout(s: 3), Throws.TypeOf<TimeoutException>());
         }
 
         protected override void ConfigureInMemoryReceiveEndpoint(IInMemoryReceiveEndpointConfigurator configurator)
@@ -78,7 +79,7 @@
         [Test]
         public async Task Should_not_cancel_the_message()
         {
-            Task<ConsumeContext<Fault<PingMessage>>> faulted = ConnectPublishHandler<Fault<PingMessage>>();
+            Task<ConsumeContext<Fault<PingMessage>>> faulted = await ConnectPublishHandler<Fault<PingMessage>>();
 
             await InputQueueSendEndpoint.Send(new PingMessage());
 
@@ -92,7 +93,7 @@
 
             await faulted;
 
-            AdvanceTime(TimeSpan.FromSeconds(20));
+            await AdvanceTime(TimeSpan.FromSeconds(20));
 
             LogContext.Debug?.Log("Advanced the clock");
 

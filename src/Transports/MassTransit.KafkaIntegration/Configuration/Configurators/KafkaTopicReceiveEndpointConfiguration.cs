@@ -4,40 +4,42 @@ namespace MassTransit.KafkaIntegration.Configurators
     using System.Collections.Generic;
     using Configuration;
     using Confluent.Kafka;
-    using Context;
-    using Contexts;
     using GreenPipes;
+    using GreenPipes.Configurators;
     using MassTransit.Registration;
-    using Riders;
+    using Pipeline;
     using Serializers;
     using Transport;
+    using Transports;
 
 
     public class KafkaTopicReceiveEndpointConfiguration<TKey, TValue> :
         ReceiverConfiguration,
+        ReceiveSettings,
         IKafkaTopicReceiveEndpointConfigurator<TKey, TValue>
         where TValue : class
     {
         readonly IBusInstance _busInstance;
         readonly ConsumerConfig _consumerConfig;
+        readonly PipeConfigurator<ConsumerContext<TKey, TValue>> _consumerConfigurator;
         readonly IReceiveEndpointConfiguration _endpointConfiguration;
-        readonly string _topic;
-        TimeSpan _checkpointInterval;
-        ushort _checkpointMessageCount;
-        int _concurrencyLimit;
+        readonly IKafkaHostConfiguration _hostConfiguration;
+        readonly IOptionsSet _options;
         IHeadersDeserializer _headersDeserializer;
         IDeserializer<TKey> _keyDeserializer;
         Action<IConsumer<TKey, TValue>, CommittedOffsets> _offsetsCommittedHandler;
         IDeserializer<TValue> _valueDeserializer;
 
-        public KafkaTopicReceiveEndpointConfiguration(ConsumerConfig consumerConfig, string topic, IBusInstance busInstance,
-            IReceiveEndpointConfiguration endpointConfiguration, IHeadersDeserializer headersDeserializer)
+        public KafkaTopicReceiveEndpointConfiguration(IKafkaHostConfiguration hostConfiguration, ConsumerConfig consumerConfig, string topic,
+            IBusInstance busInstance, IReceiveEndpointConfiguration endpointConfiguration, IHeadersDeserializer headersDeserializer)
             : base(endpointConfiguration)
         {
+            _hostConfiguration = hostConfiguration;
             _busInstance = busInstance;
             _endpointConfiguration = endpointConfiguration;
             _consumerConfig = consumerConfig;
-            _topic = topic;
+            _options = new OptionsSet();
+            Topic = topic;
 
             SetValueDeserializer(new MassTransitJsonDeserializer<TValue>());
             SetKeyDeserializer(new MassTransitJsonDeserializer<TKey>());
@@ -46,6 +48,8 @@ namespace MassTransit.KafkaIntegration.Configurators
             CheckpointInterval = TimeSpan.FromMinutes(1);
             CheckpointMessageCount = 5000;
             ConcurrencyLimit = 1;
+
+            _consumerConfigurator = new PipeConfigurator<ConsumerContext<TKey, TValue>>();
         }
 
         public AutoOffsetReset? AutoOffsetReset
@@ -58,21 +62,6 @@ namespace MassTransit.KafkaIntegration.Configurators
             set => _consumerConfig.GroupInstanceId = value;
         }
 
-        public TimeSpan CheckpointInterval
-        {
-            set => _checkpointInterval = value;
-        }
-
-        public int ConcurrencyLimit
-        {
-            set => _concurrencyLimit = value;
-        }
-
-        public ushort CheckpointMessageCount
-        {
-            set => _checkpointMessageCount = value;
-        }
-
         public PartitionAssignmentStrategy? PartitionAssignmentStrategy
         {
             set => _consumerConfig.PartitionAssignmentStrategy = value;
@@ -80,12 +69,12 @@ namespace MassTransit.KafkaIntegration.Configurators
 
         public TimeSpan? SessionTimeout
         {
-            set => _consumerConfig.SessionTimeoutMs = value?.Milliseconds;
+            set => _consumerConfig.SessionTimeoutMs = value == null ? (int?)null : Convert.ToInt32(value.Value.TotalMilliseconds);
         }
 
         public TimeSpan? HeartbeatInterval
         {
-            set => _consumerConfig.HeartbeatIntervalMs = value?.Milliseconds;
+            set => _consumerConfig.HeartbeatIntervalMs = value == null ? (int?)null : Convert.ToInt32(value.Value.TotalMilliseconds);
         }
 
         public string GroupProtocolType
@@ -95,12 +84,12 @@ namespace MassTransit.KafkaIntegration.Configurators
 
         public TimeSpan? CoordinatorQueryInterval
         {
-            set => _consumerConfig.CoordinatorQueryIntervalMs = value?.Milliseconds;
+            set => _consumerConfig.CoordinatorQueryIntervalMs = value == null ? (int?)null : Convert.ToInt32(value.Value.TotalMilliseconds);
         }
 
         public TimeSpan? MaxPollInterval
         {
-            set => _consumerConfig.MaxPollIntervalMs = value?.Milliseconds;
+            set => _consumerConfig.MaxPollIntervalMs = value == null ? (int?)null : Convert.ToInt32(value.Value.TotalMilliseconds);
         }
 
         public bool? EnableAutoOffsetStore
@@ -154,6 +143,16 @@ namespace MassTransit.KafkaIntegration.Configurators
             _headersDeserializer = deserializer ?? throw new ArgumentNullException(nameof(deserializer));
         }
 
+        public void CreateIfMissing(Action<KafkaTopicOptions> configure)
+        {
+            if (_options.TryGetOptions<KafkaTopicOptions>(out _))
+                throw new InvalidOperationException("Topic options has been already configured.");
+
+            var options = new KafkaTopicOptions(Topic);
+            configure?.Invoke(options);
+            _options.Options(options);
+        }
+
         public void SetOffsetsCommittedHandler(Action<IConsumer<TKey, TValue>, CommittedOffsets> offsetsCommittedHandler)
         {
             if (_offsetsCommittedHandler != null)
@@ -162,55 +161,74 @@ namespace MassTransit.KafkaIntegration.Configurators
             _offsetsCommittedHandler = offsetsCommittedHandler ?? throw new ArgumentNullException(nameof(offsetsCommittedHandler));
         }
 
+        public TimeSpan CheckpointInterval { set; get; }
+
+        public int ConcurrencyLimit
+        {
+            get => _endpointConfiguration.Transport.GetConcurrentMessageLimit();
+            set => ConcurrentMessageLimit = value;
+        }
+
+        public string Topic { get; }
+
+        public ushort CheckpointMessageCount { set; get; }
+
         public override IEnumerable<ValidationResult> Validate()
         {
             if (_headersDeserializer == null)
                 yield return this.Failure("HeadersDeserializer", "should not be null");
 
+            if (_options.TryGetOptions(out KafkaTopicOptions options))
+            {
+                foreach (var result in options.Validate())
+                    yield return result;
+            }
+
             foreach (var result in base.Validate())
                 yield return result;
         }
 
-        public IKafkaReceiveEndpoint Build()
+        public ReceiveEndpoint Build()
         {
-            ReceiveEndpointContext CreateContext()
-            {
-                var builder = new RiderReceiveEndpointBuilder(_busInstance, _endpointConfiguration);
+            var consumerConfig = _hostConfiguration.GetConsumerConfig(_consumerConfig);
 
+            ConsumerBuilder<TKey, TValue> CreateConsumerBuilder()
+            {
+                ConsumerBuilder<TKey, TValue> consumerBuilder = new ConsumerBuilder<TKey, TValue>(consumerConfig)
+                    .SetValueDeserializer(_valueDeserializer)
+                    .SetLogHandler((c, message) => _busInstance.HostConfiguration.ReceiveLogContext?.Debug?.Log(message.Message));
+
+                if (_keyDeserializer != null)
+                    consumerBuilder.SetKeyDeserializer(_keyDeserializer);
+                if (_offsetsCommittedHandler != null)
+                    consumerBuilder.SetOffsetsCommittedHandler(_offsetsCommittedHandler);
+
+                return consumerBuilder;
+            }
+
+            IKafkaReceiveEndpointContext<TKey, TValue> CreateContext()
+            {
+                var builder = new KafkaReceiveEndpointBuilder<TKey, TValue>(_busInstance, _endpointConfiguration, _hostConfiguration, this,
+                    _headersDeserializer, CreateConsumerBuilder);
                 foreach (var specification in Specifications)
                     specification.Configure(builder);
 
                 return builder.CreateReceiveEndpointContext();
             }
 
-            var context = CreateContext();
+            IKafkaReceiveEndpointContext<TKey, TValue> context = CreateContext();
 
+            if (_options.TryGetOptions(out KafkaTopicOptions options))
+                _consumerConfigurator.UseFilter(new ConfigureTopologyFilter<TKey, TValue>(_hostConfiguration.Configuration, options));
 
-            ConsumerBuilder<TKey, TValue> consumerBuilder = CreateConsumerBuilder(context);
-            var lockContext = new ConsumerLockContext<TKey, TValue>(consumerBuilder, context.LogContext, _checkpointInterval, _checkpointMessageCount);
+            _consumerConfigurator.UseFilter(new KafkaConsumerFilter<TKey, TValue>(context));
 
-            var receiver = new KafkaMessageReceiver<TKey, TValue>(context, lockContext, _headersDeserializer);
+            IPipe<ConsumerContext<TKey, TValue>> consumerPipe = _consumerConfigurator.Build();
 
-            context.AddOrUpdatePayload(() => lockContext, _ => lockContext);
+            var transport = new ReceiveTransport<ConsumerContext<TKey, TValue>>(_busInstance.HostConfiguration, context,
+                () => context.ConsumerContextSupervisor, consumerPipe);
 
-            return new KafkaReceiveEndpoint<TKey, TValue>(_topic, Math.Max(1000, _checkpointMessageCount / 10), _concurrencyLimit, consumerBuilder.Build(),
-                receiver, context);
-        }
-
-        ConsumerBuilder<TKey, TValue> CreateConsumerBuilder(ReceiveEndpointContext context)
-        {
-            ConsumerBuilder<TKey, TValue> consumerBuilder = new ConsumerBuilder<TKey, TValue>(_consumerConfig)
-                .SetValueDeserializer(_valueDeserializer)
-                .SetLogHandler((c, message) => context.LogContext.Info?.Log(message.Message))
-                .SetStatisticsHandler((c, value) => context.LogContext.Debug?.Log(value))
-                .SetErrorHandler((c, error) => context.LogContext.Error?.Log("Consumer error ({Code}): {Reason} on {Topic}", error.Code, error.Reason, _topic));
-
-            if (_keyDeserializer != null)
-                consumerBuilder.SetKeyDeserializer(_keyDeserializer);
-            if (_offsetsCommittedHandler != null)
-                consumerBuilder.SetOffsetsCommittedHandler(_offsetsCommittedHandler);
-
-            return consumerBuilder;
+            return new ReceiveEndpoint(transport, context);
         }
     }
 }

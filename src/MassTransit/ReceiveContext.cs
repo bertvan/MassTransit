@@ -69,6 +69,11 @@
         IPublishTopology PublishTopology { get; }
 
         /// <summary>
+        /// If true (the default), faults should be published when no ResponseAddress or FaultAddress are present.
+        /// </summary>
+        bool PublishFaults { get; }
+
+        /// <summary>
         /// Returns the message body as a stream that can be deserialized. The stream
         /// must be disposed by the caller, a reference is not retained
         /// </summary>

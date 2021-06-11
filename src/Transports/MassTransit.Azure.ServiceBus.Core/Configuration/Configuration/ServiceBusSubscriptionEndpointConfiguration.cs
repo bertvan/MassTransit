@@ -4,12 +4,13 @@
     using System.Collections.Generic;
     using System.Linq;
     using Builders;
+    using Context;
+    using Contexts;
     using GreenPipes;
     using Microsoft.Azure.ServiceBus;
     using Pipeline;
     using Settings;
     using Transport;
-    using Transports;
 
 
     public class ServiceBusSubscriptionEndpointConfiguration :
@@ -19,6 +20,7 @@
     {
         readonly IServiceBusEndpointConfiguration _endpointConfiguration;
         readonly IServiceBusHostConfiguration _hostConfiguration;
+        readonly Lazy<Uri> _inputAddress;
         readonly SubscriptionEndpointSettings _settings;
 
         public ServiceBusSubscriptionEndpointConfiguration(IServiceBusHostConfiguration hostConfiguration,
@@ -30,18 +32,21 @@
             _settings = settings;
 
             HostAddress = hostConfiguration.HostAddress;
-            InputAddress = settings.GetInputAddress(hostConfiguration.HostAddress, settings.Path);
+            _inputAddress = new Lazy<Uri>(FormatInputAddress);
         }
 
-        IServiceBusSubscriptionEndpointConfigurator IServiceBusSubscriptionEndpointConfiguration.Configurator => this;
-
-        IServiceBusTopologyConfiguration IServiceBusEndpointConfiguration.Topology => _endpointConfiguration.Topology;
+        public SubscriptionSettings Settings => _settings;
 
         public override Uri HostAddress { get; }
 
-        public override Uri InputAddress { get; }
+        public override Uri InputAddress => _inputAddress.Value;
 
-        public SubscriptionSettings Settings => _settings;
+        public override ReceiveEndpointContext CreateReceiveEndpointContext()
+        {
+            return CreateServiceBusReceiveEndpointContext();
+        }
+
+        IServiceBusTopologyConfiguration IServiceBusEndpointConfiguration.Topology => _endpointConfiguration.Topology;
 
         public override IEnumerable<ValidationResult> Validate()
         {
@@ -51,16 +56,15 @@
 
         public void Build(IHost host)
         {
-            var builder = new ServiceBusSubscriptionEndpointBuilder(_hostConfiguration, this);
+            this.ConfigureDeadLetterQueueDeadLetterTransport();
+            this.ConfigureDeadLetterQueueErrorTransport();
 
-            ApplySpecifications(builder);
+            var context = CreateServiceBusReceiveEndpointContext();
 
-            var receiveEndpointContext = builder.CreateReceiveEndpointContext();
-
-            ClientPipeConfigurator.UseFilter(new ConfigureTopologyFilter<SubscriptionSettings>(_settings, receiveEndpointContext.BrokerTopology,
+            ClientPipeConfigurator.UseFilter(new ConfigureTopologyFilter<SubscriptionSettings>(_settings, context.BrokerTopology,
                 _settings.RemoveSubscriptions, _hostConfiguration.ConnectionContextSupervisor.Stopping));
 
-            CreateReceiveEndpoint(host, receiveEndpointContext);
+            CreateReceiveEndpoint(host, context);
         }
 
         public Filter Filter
@@ -73,23 +77,18 @@
             set => _settings.Rule = value;
         }
 
-        protected override IErrorTransport CreateErrorTransport()
+        ServiceBusReceiveEndpointContext CreateServiceBusReceiveEndpointContext()
         {
-            var settings = _endpointConfiguration.Topology.Send.GetErrorSettings(_settings.SubscriptionConfigurator, _hostConfiguration.HostAddress);
+            var builder = new ServiceBusSubscriptionEndpointBuilder(_hostConfiguration, this);
 
-            return new BrokeredMessageErrorTransport(_hostConfiguration.CreateSendEndpointContextSupervisor(settings));
+            ApplySpecifications(builder);
+
+            return builder.CreateReceiveEndpointContext();
         }
 
-        protected override IDeadLetterTransport CreateDeadLetterTransport()
+        Uri FormatInputAddress()
         {
-            var settings = _endpointConfiguration.Topology.Send.GetDeadLetterSettings(_settings.SubscriptionConfigurator, _hostConfiguration.HostAddress);
-
-            return new BrokeredMessageDeadLetterTransport(_hostConfiguration.CreateSendEndpointContextSupervisor(settings));
-        }
-
-        protected override IClientContextSupervisor CreateClientContextSupervisor(IConnectionContextSupervisor supervisor)
-        {
-            return new ClientContextSupervisor(new SubscriptionClientContextFactory(supervisor, _settings));
+            return _settings.GetInputAddress(_hostConfiguration.HostAddress, _settings.Path);
         }
     }
 }

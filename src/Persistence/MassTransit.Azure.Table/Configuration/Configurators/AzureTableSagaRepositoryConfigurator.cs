@@ -7,6 +7,7 @@ namespace MassTransit.Azure.Table.Configurators
     using MassTransit.Saga;
     using Microsoft.Azure.Cosmos.Table;
     using Registration;
+    using Saga;
 
 
     public class AzureTableSagaRepositoryConfigurator<TSaga> :
@@ -16,6 +17,9 @@ namespace MassTransit.Azure.Table.Configurators
     {
         Func<IConfigurationServiceProvider, CloudTable> _connectionFactory;
 
+        Func<IConfigurationServiceProvider, ISagaKeyFormatter<TSaga>> _formatterFactory = provider =>
+            new ConstPartitionSagaKeyFormatter<TSaga>(typeof(TSaga).Name);
+
         /// <summary>
         /// Supply factory for retrieving the Cloud Table.
         /// </summary>
@@ -23,6 +27,24 @@ namespace MassTransit.Azure.Table.Configurators
         public void ConnectionFactory(Func<CloudTable> connectionFactory)
         {
             _connectionFactory = provider => connectionFactory();
+        }
+
+        /// <summary>
+        /// Supply factory for retrieving the Cloud Table.
+        /// </summary>
+        /// <param name="connectionFactory"></param>
+        public void ConnectionFactory(Func<IConfigurationServiceProvider, CloudTable> connectionFactory)
+        {
+            _connectionFactory = connectionFactory;
+        }
+
+        /// <summary>
+        /// Supply factory for retrieving the key formatter.
+        /// </summary>
+        /// <param name="formatterFactory"></param>
+        public void KeyFormatter(Func<ISagaKeyFormatter<TSaga>> formatterFactory)
+        {
+            _formatterFactory = provider => formatterFactory();
         }
 
         public IEnumerable<ValidationResult> Validate()
@@ -35,6 +57,7 @@ namespace MassTransit.Azure.Table.Configurators
             where T : class, ISaga
         {
             configurator.RegisterSingleInstance(_connectionFactory);
+            configurator.RegisterSingleInstance(_formatterFactory);
             configurator.RegisterSagaRepository<T, DatabaseContext<T>, SagaConsumeContextFactory<DatabaseContext<T>, T>,
                 AzureTableSagaRepositoryContextFactory<T>>();
         }

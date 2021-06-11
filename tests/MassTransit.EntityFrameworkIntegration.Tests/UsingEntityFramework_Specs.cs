@@ -75,8 +75,7 @@
 
             await InputQueueSendEndpoint.Send(new GotHitByACar {CorrelationId = correlationId});
 
-            sagaId = await _repository.Value.ShouldContainSaga(x => x.CorrelationId == correlationId
-                && x.CurrentState == _machine.Dead.Name, TestTimeout);
+            sagaId = await _repository.Value.ShouldContainSagaInState(correlationId, _machine, _machine.Dead, TestTimeout);
 
             Assert.IsTrue(sagaId.HasValue);
 
@@ -105,7 +104,7 @@
         public When_using_EntityFramework()
         {
             _sagaDbContextFactory = new DelegateSagaDbContextFactory<ShoppingChore>(
-                () => new ShoppingChoreSagaDbContext(SagaDbContextFactoryProvider.GetLocalDbConnectionString()));
+                () => new ShoppingChoreSagaDbContext(LocalDbConnectionStringProvider.GetLocalDbConnectionString()));
 
             _repository = new Lazy<ISagaRepository<ShoppingChore>>(() => EntityFrameworkSagaRepository<ShoppingChore>.CreatePessimistic(_sagaDbContextFactory));
         }

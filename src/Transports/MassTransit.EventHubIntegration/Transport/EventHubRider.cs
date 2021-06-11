@@ -1,50 +1,124 @@
 namespace MassTransit.EventHubIntegration
 {
+    using System;
     using System.Collections.Generic;
     using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
     using Contexts;
-    using Pipeline.Observables;
+    using GreenPipes;
+    using GreenPipes.Agents;
+    using MassTransit.Registration;
     using Riders;
+    using Transports;
     using Util;
 
 
     public class EventHubRider :
-        BaseRider,
         IEventHubRider
     {
-        readonly IEnumerable<IEventHubReceiveEndpoint> _endpoints;
-        readonly IEventHubProducerSharedContext _producerSharedContext;
+        readonly IBusInstance _busInstance;
+        readonly IReceiveEndpointCollection _endpoints;
+        readonly IEventHubHostConfiguration _hostConfiguration;
+        readonly IEventHubProducerProvider _producerProvider;
+        readonly IRiderRegistrationContext _registrationContext;
 
-        public EventHubRider(IEnumerable<IEventHubReceiveEndpoint> endpoints, IEventHubProducerSharedContext producerSharedContext, RiderObservable observers)
-            : base("azure.event-hub", observers)
+        public EventHubRider(IEventHubHostConfiguration hostConfiguration, IBusInstance busInstance, IReceiveEndpointCollection endpoints,
+            IEventHubProducerProvider producerProvider,
+            IRiderRegistrationContext registrationContext)
         {
+            _hostConfiguration = hostConfiguration;
+            _busInstance = busInstance;
             _endpoints = endpoints;
-            _producerSharedContext = producerSharedContext;
+            _producerProvider = producerProvider;
+            _registrationContext = registrationContext;
         }
 
         public IEventHubProducerProvider GetProducerProvider(ConsumeContext consumeContext = default)
         {
-            return new EventHubProducerProvider(_producerSharedContext, consumeContext);
+            return consumeContext == null
+                ? _producerProvider
+                : new ConsumeContextEventHubProducerProvider(_producerProvider, consumeContext);
         }
 
-        protected override Task StartRider(CancellationToken cancellationToken)
+        public HostReceiveEndpointHandle ConnectEventHubEndpoint(string eventHubName, string consumerGroup,
+            Action<IRiderRegistrationContext, IEventHubReceiveEndpointConfigurator> configure)
         {
-            if (_endpoints == null || !_endpoints.Any())
-                return TaskUtil.Completed;
+            var specification = _hostConfiguration.CreateSpecification(eventHubName, consumerGroup, configurator =>
+            {
+                configure?.Invoke(_registrationContext, configurator);
+            });
 
-            return Task.WhenAll(_endpoints.Select(endpoint => endpoint.Connect(cancellationToken)));
+            _endpoints.Add(specification.EndpointName, specification.CreateReceiveEndpoint(_busInstance));
+
+            return _endpoints.Start(specification.EndpointName);
         }
 
-        protected override async Task StopRider(CancellationToken cancellationToken)
+        public RiderHandle Start(CancellationToken cancellationToken = default)
         {
-            await _producerSharedContext.DisposeAsync().ConfigureAwait(false);
+            HostReceiveEndpointHandle[] endpointsHandle = _endpoints.StartEndpoints(cancellationToken);
 
-            if (_endpoints == null || !_endpoints.Any())
-                return;
+            var ready = endpointsHandle.Length == 0 ? TaskUtil.Completed : _hostConfiguration.ConnectionContextSupervisor.Ready;
 
-            await Task.WhenAll(_endpoints.Select(endpoint => endpoint.Disconnect(cancellationToken))).ConfigureAwait(false);
+            var agent = new RiderAgent(_hostConfiguration.ConnectionContextSupervisor, _endpoints, ready);
+
+            return new Handle(endpointsHandle, agent);
+        }
+
+
+        class RiderAgent :
+            Agent
+        {
+            readonly IReceiveEndpointCollection _endpoints;
+            readonly IConnectionContextSupervisor _supervisor;
+
+            public RiderAgent(IConnectionContextSupervisor supervisor, IReceiveEndpointCollection endpoints, Task ready)
+            {
+                _supervisor = supervisor;
+                _endpoints = endpoints;
+
+                SetReady(ready);
+                SetCompleted(_supervisor.Completed);
+            }
+
+            protected override async Task StopAgent(StopContext context)
+            {
+                await _endpoints.Stop(context.CancellationToken).ConfigureAwait(false);
+                await _supervisor.Stop(context).ConfigureAwait(false);
+                await base.StopAgent(context).ConfigureAwait(false);
+            }
+        }
+
+
+        class Handle :
+            RiderHandle
+        {
+            readonly IAgent _agent;
+            readonly HostReceiveEndpointHandle[] _endpoints;
+
+            public Handle(HostReceiveEndpointHandle[] endpoints, IAgent agent)
+            {
+                _endpoints = endpoints;
+                _agent = agent;
+            }
+
+            public Task Ready => ReadyOrNot(_endpoints.Select(x => x.Ready));
+
+            public Task StopAsync(CancellationToken cancellationToken)
+            {
+                return _agent.Stop("EvenHub stopped", cancellationToken);
+            }
+
+            async Task ReadyOrNot(IEnumerable<Task<ReceiveEndpointReady>> endpoints)
+            {
+                Task<ReceiveEndpointReady>[] readyTasks = endpoints as Task<ReceiveEndpointReady>[] ?? endpoints.ToArray();
+                foreach (Task<ReceiveEndpointReady> ready in readyTasks)
+                    await ready.ConfigureAwait(false);
+
+                await _agent.Ready.ConfigureAwait(false);
+
+                await Task.WhenAll(readyTasks).ConfigureAwait(false);
+            }
         }
     }
 }

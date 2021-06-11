@@ -1,4 +1,4 @@
-namespace MassTransit.MartenIntegration.Tests
+namespace MassTransit.DapperIntegration.Tests
 {
     namespace ContainerTests
     {
@@ -7,14 +7,14 @@ namespace MassTransit.MartenIntegration.Tests
         using Automatonymous;
         using Dapper;
         using Dapper.Contrib.Extensions;
-        using DapperIntegration;
-        using DapperIntegration.Tests;
         using GreenPipes;
         using Microsoft.Data.SqlClient;
         using Microsoft.Extensions.DependencyInjection;
         using NUnit.Framework;
+        using Saga;
         using TestFramework;
         using TestFramework.Sagas;
+        using Testing;
 
 
         public class Using_the_container_integration :
@@ -31,10 +31,11 @@ namespace MassTransit.MartenIntegration.Tests
             }
 
             [Test]
+            [Category("Flaky")]
             public async Task Should_work_as_expected()
             {
-                Task<ConsumeContext<TestStarted>> started = ConnectPublishHandler<TestStarted>();
-                Task<ConsumeContext<TestUpdated>> updated = ConnectPublishHandler<TestUpdated>();
+                Task<ConsumeContext<TestStarted>> started = await ConnectPublishHandler<TestStarted>();
+                Task<ConsumeContext<TestUpdated>> updated = await ConnectPublishHandler<TestUpdated>();
 
                 var correlationId = NewId.NextGuid();
 
@@ -45,6 +46,13 @@ namespace MassTransit.MartenIntegration.Tests
                 });
 
                 await started;
+
+                var repository = _provider.GetRequiredService<ISagaRepository<TestInstance>>();
+
+                var machine = _provider.GetRequiredService<TestStateMachineSaga>();
+
+                var sagaId = await repository.ShouldContainSagaInState(correlationId, machine, x => x.Active, TestTimeout);
+                Assert.That(sagaId.HasValue);
 
                 await InputQueueSendEndpoint.Send(new UpdateTest
                 {

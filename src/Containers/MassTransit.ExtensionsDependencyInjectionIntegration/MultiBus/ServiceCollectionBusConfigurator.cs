@@ -24,17 +24,13 @@ namespace MassTransit.ExtensionsDependencyInjectionIntegration.MultiBus
             IBusRegistrationContext CreateRegistrationContext(IServiceProvider serviceProvider)
             {
                 var provider = serviceProvider.GetRequiredService<IConfigurationServiceProvider>();
-                var busHealth = serviceProvider.GetRequiredService<Bind<TBus, BusHealth>>();
-                return new BusRegistrationContext(provider, busHealth.Value, Endpoints, Consumers, Sagas, ExecuteActivities, Activities);
+                return new BusRegistrationContext(provider, Endpoints, Consumers, Sagas, ExecuteActivities, Activities, Futures);
             }
 
-            collection.AddSingleton(provider => Bind<TBus>.Create(GetSendEndpointProvider(provider)));
-            collection.AddSingleton(provider => Bind<TBus>.Create(GetPublishEndpoint(provider)));
+            collection.AddScoped(provider => Bind<TBus>.Create(GetSendEndpointProvider(provider)));
+            collection.AddScoped(provider => Bind<TBus>.Create(GetPublishEndpoint(provider)));
             collection.AddSingleton(provider =>
                 Bind<TBus>.Create(ClientFactoryProvider(provider.GetRequiredService<IConfigurationServiceProvider>(), provider.GetRequiredService<TBus>())));
-
-            collection.AddSingleton(provider => Bind<TBus>.Create(new BusHealth(typeof(TBus).Name)));
-            collection.AddSingleton<IBusHealth>(provider => provider.GetRequiredService<Bind<TBus, BusHealth>>().Value);
 
             collection.AddSingleton(provider => Bind<TBus>.Create(CreateRegistrationContext(provider)));
         }
@@ -51,10 +47,17 @@ namespace MassTransit.ExtensionsDependencyInjectionIntegration.MultiBus
 
             ThrowIfAlreadyConfigured(nameof(SetBusFactory));
 
-            Collection.AddSingleton(provider => Bind<TBus>.Create(CreateBus(busFactory, provider)));
+            Collection.AddSingleton(provider => CreateBus(busFactory, provider));
+            //TODO: remove it after some versions, only for backward-compatibility for now
+            Collection.AddSingleton(provider => Bind<TBus>.Create(provider.GetRequiredService<IBusInstance<TBus>>()));
 
-            Collection.AddSingleton<IBusInstance>(provider => provider.GetRequiredService<Bind<TBus, IBusInstance<TBus>>>().Value);
-            Collection.AddSingleton(provider => provider.GetRequiredService<Bind<TBus, IBusInstance<TBus>>>().Value.BusInstance);
+            Collection.AddSingleton<IBusInstance>(provider => provider.GetRequiredService<IBusInstance<TBus>>());
+            Collection.AddSingleton(provider =>
+                Bind<TBus>.Create<IReceiveEndpointConnector>(provider.GetRequiredService<IBusInstance<TBus>>()));
+            Collection.AddSingleton(provider => provider.GetRequiredService<IBusInstance<TBus>>().BusInstance);
+
+        #pragma warning disable 618
+            Collection.AddSingleton<IBusHealth>(provider => new BusHealth(provider.GetRequiredService<IBusInstance<TBus>>()));
         }
 
         public override void AddRider(Action<IRiderRegistrationConfigurator> configure)
@@ -63,14 +66,14 @@ namespace MassTransit.ExtensionsDependencyInjectionIntegration.MultiBus
             configure?.Invoke(configurator);
         }
 
-        IBusInstance<TBus> CreateBus<T>(T busFactory, IServiceProvider provider)
+        static IBusInstance<TBus> CreateBus<T>(T busFactory, IServiceProvider provider)
             where T : IRegistrationBusFactory
         {
             IEnumerable<IBusInstanceSpecification> specifications = provider.GetServices<Bind<TBus, IBusInstanceSpecification>>().Select(x => x.Value);
 
             var instance = busFactory.CreateBus(provider.GetRequiredService<Bind<TBus, IBusRegistrationContext>>().Value, specifications);
 
-            var busInstance = ActivatorUtilities.CreateInstance<TBusInstance>(provider, instance.BusControl);
+            var busInstance = provider.GetService<TBusInstance>() ?? ActivatorUtilities.CreateInstance<TBusInstance>(provider, instance.BusControl);
 
             return new MultiBusInstance<TBus>(busInstance, instance);
         }

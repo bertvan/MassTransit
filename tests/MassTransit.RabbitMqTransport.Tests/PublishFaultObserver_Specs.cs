@@ -6,7 +6,7 @@
 
 
     [TestFixture]
-    [Category("SlowAF")]
+    [Explicit]
     public class PublishFaultObserver_Specs :
         RabbitMqTestFixture
     {

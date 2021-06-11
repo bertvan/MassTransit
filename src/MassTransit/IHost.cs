@@ -2,16 +2,14 @@ namespace MassTransit
 {
     using System;
     using System.Threading;
-    using System.Threading.Tasks;
     using GreenPipes;
-    using GreenPipes.Agents;
     using Pipeline;
+    using Riders;
     using Topology;
     using Transports;
 
 
     public interface IHost :
-        ISupervisor,
         IReceiveConnector,
         IConsumeMessageObserverConnector,
         IConsumeObserverConnector,
@@ -25,8 +23,22 @@ namespace MassTransit
 
         IHostTopology Topology { get; }
 
-        Task<HostHandle> Start(CancellationToken cancellationToken);
+        HostHandle Start(CancellationToken cancellationToken);
 
-        void AddReceiveEndpoint(string endpointName, IReceiveEndpointControl receiveEndpoint);
+        void AddReceiveEndpoint(string endpointName, ReceiveEndpoint receiveEndpoint);
+
+        IRider GetRider(string name);
+
+        void AddRider(string name, IRiderControl riderControl);
+
+        HealthResult CheckHealth(BusState busState, string healthMessage);
+    }
+
+
+    public interface IHost<out TEndpointConfigurator> :
+        IHost,
+        IReceiveConnector<TEndpointConfigurator>
+        where TEndpointConfigurator : IReceiveEndpointConfigurator
+    {
     }
 }

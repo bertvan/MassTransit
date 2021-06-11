@@ -4,6 +4,7 @@
     using System.Threading;
     using System.Threading.Tasks;
     using Configuration;
+    using Context;
     using Contexts;
     using Exceptions;
     using GreenPipes;
@@ -16,19 +17,11 @@
     public class ConnectionContextFactory :
         IPipeContextFactory<ConnectionContext>
     {
-        readonly IRetryPolicy _connectionRetryPolicy;
         readonly IAmazonSqsHostConfiguration _hostConfiguration;
 
         public ConnectionContextFactory(IAmazonSqsHostConfiguration hostConfiguration)
         {
             _hostConfiguration = hostConfiguration;
-
-            _connectionRetryPolicy = Retry.CreatePolicy(x =>
-            {
-                x.Handle<AmazonSqsConnectException>();
-
-                x.Exponential(1000, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(3));
-            });
         }
 
         IPipeContextAgent<ConnectionContext> IPipeContextFactory<ConnectionContext>.CreateContext(ISupervisor supervisor)
@@ -55,7 +48,7 @@
 
         async Task<ConnectionContext> CreateConnection(ISupervisor supervisor)
         {
-            return await _connectionRetryPolicy.Retry(async () =>
+            return await _hostConfiguration.ReceiveTransportRetryPolicy.Retry(async () =>
             {
                 if (supervisor.Stopping.IsCancellationRequested)
                     throw new OperationCanceledException($"The connection is stopping and cannot be used: {_hostConfiguration.HostAddress}");
@@ -75,7 +68,8 @@
                 }
                 catch (Exception ex)
                 {
-                    throw new AmazonSqsConnectException("Connect failed: " + _hostConfiguration.Settings, ex);
+                    LogContext.Warning?.Log(ex, "Connection Failed: {InputAddress}", _hostConfiguration.HostAddress);
+                    throw new AmazonSqsConnectionException("Connect failed: " + _hostConfiguration.Settings, ex);
                 }
             }, supervisor.Stopping).ConfigureAwait(false);
         }

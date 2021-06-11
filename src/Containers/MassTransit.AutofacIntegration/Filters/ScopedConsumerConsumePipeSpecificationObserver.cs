@@ -2,21 +2,19 @@ namespace MassTransit.AutofacIntegration.Filters
 {
     using System;
     using ConsumeConfigurators;
-    using GreenPipes.Specifications;
     using ScopeProviders;
-    using Scoping.Filters;
 
 
     public class ScopedConsumerConsumePipeSpecificationObserver :
         IConsumerConfigurationObserver
     {
         readonly Type _filterType;
-        readonly ILifetimeScopeProvider _lifetimeScopeProvider;
+        readonly ILifetimeScopeProvider _provider;
 
-        public ScopedConsumerConsumePipeSpecificationObserver(Type filterType, ILifetimeScopeProvider lifetimeScopeProvider)
+        public ScopedConsumerConsumePipeSpecificationObserver(Type filterType, ILifetimeScopeProvider provider)
         {
             _filterType = filterType;
-            _lifetimeScopeProvider = lifetimeScopeProvider;
+            _provider = provider;
         }
 
         public void ConsumerConfigured<TConsumer>(IConsumerConfigurator<TConsumer> configurator)
@@ -28,15 +26,7 @@ namespace MassTransit.AutofacIntegration.Filters
             where TConsumer : class
             where TMessage : class
         {
-            var scopeProviderType = typeof(AutofacFilterContextScopeProvider<,>)
-                .MakeGenericType(_filterType.MakeGenericType(typeof(TMessage)), typeof(ConsumeContext<TMessage>));
-
-            var scopeProvider = (IFilterContextScopeProvider<ConsumeContext<TMessage>>)Activator.CreateInstance(scopeProviderType, _lifetimeScopeProvider);
-
-            var filter = new ScopedFilter<ConsumeContext<TMessage>>(scopeProvider);
-            var specification = new FilterPipeSpecification<ConsumeContext<TMessage>>(filter);
-
-            configurator.Message(m => m.AddPipeSpecification(specification));
+            configurator.AddScopedFilter<ConsumerConsumeContext<TConsumer, TMessage>, ConsumeContext<TMessage>, TMessage>(_filterType, _provider);
         }
     }
 }

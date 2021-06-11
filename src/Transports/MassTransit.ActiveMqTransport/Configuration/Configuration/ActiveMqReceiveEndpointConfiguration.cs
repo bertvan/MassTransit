@@ -3,8 +3,9 @@
     using System;
     using System.Collections.Generic;
     using Builders;
+    using Context;
+    using Contexts;
     using GreenPipes;
-    using GreenPipes.Agents;
     using GreenPipes.Builders;
     using GreenPipes.Configurators;
     using MassTransit.Configuration;
@@ -12,7 +13,6 @@
     using Pipeline;
     using Topology;
     using Topology.Settings;
-    using Transport;
     using Transports;
     using Util;
 
@@ -49,41 +49,28 @@
         public override Uri InputAddress => _inputAddress.Value;
         IActiveMqTopologyConfiguration IActiveMqEndpointConfiguration.Topology => _endpointConfiguration.Topology;
 
+        public override ReceiveEndpointContext CreateReceiveEndpointContext()
+        {
+            return CreateActiveMqReceiveEndpointContext();
+        }
+
         public void Build(IHost host)
         {
-            var builder = new ActiveMqReceiveEndpointBuilder(_hostConfiguration, this);
+            var context = CreateActiveMqReceiveEndpointContext();
 
-            ApplySpecifications(builder);
+            _sessionConfigurator.UseFilter(new ConfigureTopologyFilter<ReceiveSettings>(_settings, context.BrokerTopology));
 
-            var receiveEndpointContext = builder.CreateReceiveEndpointContext();
-
-            _sessionConfigurator.UseFilter(new ConfigureTopologyFilter<ReceiveSettings>(_settings, receiveEndpointContext.BrokerTopology));
-
-            IAgent consumerAgent;
             if (_hostConfiguration.DeployTopologyOnly)
-            {
-                var transportReadyFilter = new TransportReadyFilter<SessionContext>(receiveEndpointContext);
-                _sessionConfigurator.UseFilter(transportReadyFilter);
-
-                consumerAgent = transportReadyFilter;
-            }
+                _sessionConfigurator.UseFilter(new TransportReadyFilter<SessionContext>(context));
             else
-            {
-                var consumerFilter = new ActiveMqConsumerFilter(receiveEndpointContext);
+                _sessionConfigurator.UseFilter(new ActiveMqConsumerFilter(context));
 
-                _sessionConfigurator.UseFilter(consumerFilter);
+            IPipe<SessionContext> sessionPipe = _sessionConfigurator.Build();
 
-                consumerAgent = consumerFilter;
-            }
+            var transport = new ReceiveTransport<SessionContext>(_hostConfiguration, context,
+                () => context.SessionContextSupervisor, sessionPipe);
 
-            IFilter<ConnectionContext> sessionFilter = new ReceiveSessionFilter(_sessionConfigurator.Build());
-
-            _connectionConfigurator.UseFilter(sessionFilter);
-
-            var transport = new ActiveMqReceiveTransport(_hostConfiguration, _settings, _connectionConfigurator.Build(), receiveEndpointContext);
-            transport.Add(consumerAgent);
-
-            var receiveEndpoint = new ReceiveEndpoint(transport, receiveEndpointContext);
+            var receiveEndpoint = new ReceiveEndpoint(transport, context);
 
             var queueName = _settings.EntityName ?? NewId.Next().ToString(FormatUtil.Formatter);
 
@@ -101,11 +88,6 @@
 
             foreach (var result in base.Validate())
                 yield return result.WithParentKey(queueName);
-        }
-
-        public ushort PrefetchCount
-        {
-            set => _settings.PrefetchCount = value;
         }
 
         public bool Durable
@@ -150,6 +132,15 @@
         public void ConfigureConnection(Action<IPipeConfigurator<ConnectionContext>> configure)
         {
             configure?.Invoke(_connectionConfigurator);
+        }
+
+        ActiveMqReceiveEndpointContext CreateActiveMqReceiveEndpointContext()
+        {
+            var builder = new ActiveMqReceiveEndpointBuilder(_hostConfiguration, this);
+
+            ApplySpecifications(builder);
+
+            return builder.CreateReceiveEndpointContext();
         }
 
         Uri FormatInputAddress()

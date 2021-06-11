@@ -7,6 +7,7 @@ namespace MassTransit.EventHubIntegration.Specifications
     using MassTransit.Configurators;
     using MassTransit.Registration;
     using Pipeline.Observables;
+    using Transports;
 
 
     public class EventHubReceiveEndpointSpecification :
@@ -15,22 +16,27 @@ namespace MassTransit.EventHubIntegration.Specifications
         readonly Action<IEventHubReceiveEndpointConfigurator> _configure;
         readonly string _consumerGroup;
         readonly ReceiveEndpointObservable _endpointObservers;
+        readonly string _eventHubName;
+        readonly IEventHubHostConfiguration _hostConfiguration;
         readonly IHostSettings _hostSettings;
         readonly IStorageSettings _storageSettings;
 
-        public EventHubReceiveEndpointSpecification(string eventHubName, string consumerGroup, IHostSettings hostSettings, IStorageSettings storageSettings,
+        public EventHubReceiveEndpointSpecification(IEventHubHostConfiguration hostConfiguration, string eventHubName, string consumerGroup,
+            IHostSettings hostSettings, IStorageSettings storageSettings,
             Action<IEventHubReceiveEndpointConfigurator> configure)
         {
+            _hostConfiguration = hostConfiguration;
+            _eventHubName = eventHubName;
             _consumerGroup = consumerGroup;
             _hostSettings = hostSettings;
             _storageSettings = storageSettings;
             _configure = configure;
-            Name = eventHubName;
+            EndpointName = $"{EventHubEndpointAddress.PathPrefix}/{_eventHubName}";
 
             _endpointObservers = new ReceiveEndpointObservable();
         }
 
-        public string Name { get; }
+        public string EndpointName { get; }
 
         public ConnectHandle ConnectReceiveEndpointObserver(IReceiveEndpointObserver observer)
         {
@@ -39,7 +45,7 @@ namespace MassTransit.EventHubIntegration.Specifications
 
         public IEnumerable<ValidationResult> Validate()
         {
-            if (string.IsNullOrWhiteSpace(Name))
+            if (string.IsNullOrWhiteSpace(_eventHubName))
                 yield return this.Failure("EventHubName", "should not be empty");
 
             if (string.IsNullOrWhiteSpace(_consumerGroup))
@@ -54,13 +60,12 @@ namespace MassTransit.EventHubIntegration.Specifications
                 yield return this.Failure("StorageSettings", "is invalid");
         }
 
-        public IEventHubReceiveEndpoint Create(IBusInstance busInstance)
+        public ReceiveEndpoint CreateReceiveEndpoint(IBusInstance busInstance)
         {
-            var endpointConfiguration = busInstance.HostConfiguration.CreateReceiveEndpointConfiguration($"{EventHubEndpointAddress.PathPrefix}/{Name}");
+            var endpointConfiguration = busInstance.HostConfiguration.CreateReceiveEndpointConfiguration(EndpointName);
             endpointConfiguration.ConnectReceiveEndpointObserver(_endpointObservers);
 
-            var configurator =
-                new EventHubReceiveEndpointConfigurator(Name, _consumerGroup, _hostSettings, _storageSettings, busInstance, endpointConfiguration);
+            var configurator = new EventHubReceiveEndpointConfigurator(_hostConfiguration, _eventHubName, _consumerGroup, busInstance, endpointConfiguration);
             _configure?.Invoke(configurator);
 
             var result = BusConfigurationResult.CompileResults(configurator.Validate());
@@ -71,7 +76,7 @@ namespace MassTransit.EventHubIntegration.Specifications
             }
             catch (Exception ex)
             {
-                throw new ConfigurationException(result, "An exception occurred creating the EventDataReceiver", ex);
+                throw new ConfigurationException(result, "An exception occurred creating the EventHub receive endpoint", ex);
             }
         }
     }

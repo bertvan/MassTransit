@@ -38,8 +38,8 @@
         static async Task<SessionContext> CreateSharedSession(Task<SessionContext> context, CancellationToken cancellationToken)
         {
             return context.IsCompletedSuccessfully()
-                ? new SharedSessionContext(context.Result, cancellationToken)
-                : new SharedSessionContext(await context.OrCanceled(cancellationToken).ConfigureAwait(false), cancellationToken);
+                ? new ScopeSessionContext(context.Result, cancellationToken)
+                : new ScopeSessionContext(await context.OrCanceled(cancellationToken).ConfigureAwait(false), cancellationToken);
         }
 
         void CreateSession(IAsyncPipeContextAgent<SessionContext> asyncContext, CancellationToken cancellationToken)
@@ -58,7 +58,8 @@
 
             #pragma warning disable 4014
                 // ReSharper disable once MethodSupportsCancellation
-                asyncContext.Completed.ContinueWith(_ => connectionContext.Connection.ExceptionListener -= HandleConnectionException);
+                asyncContext.Completed.ContinueWith(_ => connectionContext.Connection.ExceptionListener -= HandleConnectionException,
+                    TaskContinuationOptions.ExecuteSynchronously);
             #pragma warning restore 4014
 
                 return new ActiveMqSessionContext(connectionContext, session, createCancellationToken);

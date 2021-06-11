@@ -34,6 +34,7 @@
         /// <summary>
         /// The number of concurrent messages to process. Could increase throughput but will not preserve an order (default: 1)
         /// </summary>
+        [Obsolete("Use ConcurrentMessageLimit instead")]
         int ConcurrencyLimit { set; }
 
         /// <summary>
@@ -140,6 +141,12 @@
         /// </summary>
         /// <param name="deserializer"></param>
         void SetHeadersDeserializer(IHeadersDeserializer deserializer);
+
+        /// <summary>
+        /// Create topic if not exists every time endpoint starts (admin permissions are required).
+        /// </summary>
+        /// <param name="configure"></param>
+        void CreateIfMissing(Action<KafkaTopicOptions> configure);
     }
 
 

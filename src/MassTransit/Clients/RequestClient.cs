@@ -73,7 +73,7 @@
             return GetResponseInternal<T>(Request, cancellationToken, timeout);
         }
 
-        public Task<(Task<Response<T1>>, Task<Response<T2>>)> GetResponse<T1, T2>(TRequest message, CancellationToken cancellationToken,
+        public Task<Response<T1, T2>> GetResponse<T1, T2>(TRequest message, CancellationToken cancellationToken,
             RequestTimeout timeout)
             where T1 : class
             where T2 : class
@@ -88,7 +88,7 @@
             return GetResponseInternal<T1, T2>(Request, cancellationToken, timeout);
         }
 
-        public Task<(Task<Response<T1>>, Task<Response<T2>>)> GetResponse<T1, T2>(object values, CancellationToken cancellationToken = default,
+        public Task<Response<T1, T2>> GetResponse<T1, T2>(object values, CancellationToken cancellationToken = default,
             RequestTimeout timeout = default)
             where T1 : class
             where T2 : class
@@ -104,6 +104,39 @@
             return GetResponseInternal<T1, T2>(Request, cancellationToken, timeout);
         }
 
+        public Task<Response<T1, T2, T3>> GetResponse<T1, T2, T3>(TRequest message, CancellationToken cancellationToken = default,
+            RequestTimeout timeout = default)
+            where T1 : class
+            where T2 : class
+            where T3 : class
+        {
+            async Task<TRequest> Request(Guid requestId, IPipe<SendContext<TRequest>> pipe, CancellationToken token)
+            {
+                await _requestSendEndpoint.Send(requestId, message, pipe, token).ConfigureAwait(false);
+
+                return message;
+            }
+
+            return GetResponseInternal<T1, T2, T3>(Request, cancellationToken, timeout);
+        }
+
+        public Task<Response<T1, T2, T3>> GetResponse<T1, T2, T3>(object values, CancellationToken cancellationToken = default,
+            RequestTimeout timeout = default)
+            where T1 : class
+            where T2 : class
+            where T3 : class
+        {
+            if (values == null)
+                throw new ArgumentNullException(nameof(values));
+
+            async Task<TRequest> Request(Guid requestId, IPipe<SendContext<TRequest>> pipe, CancellationToken token)
+            {
+                return await _requestSendEndpoint.Send(requestId, values, pipe, token).ConfigureAwait(false);
+            }
+
+            return GetResponseInternal<T1, T2, T3>(Request, cancellationToken, timeout);
+        }
+
         async Task<Response<T>> GetResponseInternal<T>(ClientRequestHandle<TRequest>.SendRequestCallback request, CancellationToken cancellationToken,
             RequestTimeout timeout)
             where T : class
@@ -113,8 +146,7 @@
             return await handle.GetResponse<T>().ConfigureAwait(false);
         }
 
-        async Task<(Task<Response<T1>>, Task<Response<T2>>)> GetResponseInternal<T1, T2>(ClientRequestHandle<TRequest>.SendRequestCallback request,
-            CancellationToken cancellationToken,
+        async Task<Response<T1, T2>> GetResponseInternal<T1, T2>(ClientRequestHandle<TRequest>.SendRequestCallback request, CancellationToken cancellationToken,
             RequestTimeout timeout)
             where T1 : class
             where T2 : class
@@ -124,9 +156,30 @@
             Task<Response<T1>> result1 = handle.GetResponse<T1>(false);
             Task<Response<T2>> result2 = handle.GetResponse<T2>();
 
-            await Task.WhenAny(result1, result2).ConfigureAwait(false);
+            var task = await Task.WhenAny(result1, result2).ConfigureAwait(false);
 
-            return (result1, result2);
+            await task.ConfigureAwait(false);
+
+            return new Response<T1, T2>(result1, result2);
+        }
+
+        async Task<Response<T1, T2, T3>> GetResponseInternal<T1, T2, T3>(ClientRequestHandle<TRequest>.SendRequestCallback request, CancellationToken
+            cancellationToken, RequestTimeout timeout)
+            where T1 : class
+            where T2 : class
+            where T3 : class
+        {
+            using RequestHandle<TRequest> handle = new ClientRequestHandle<TRequest>(_context, request, cancellationToken, timeout.Or(_timeout));
+
+            Task<Response<T1>> result1 = handle.GetResponse<T1>(false);
+            Task<Response<T2>> result2 = handle.GetResponse<T2>(false);
+            Task<Response<T3>> result3 = handle.GetResponse<T3>();
+
+            var task = await Task.WhenAny(result1, result2, result3).ConfigureAwait(false);
+
+            await task.ConfigureAwait(false);
+
+            return new Response<T1, T2, T3>(result1, result2, result3);
         }
     }
 }

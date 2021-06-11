@@ -20,6 +20,7 @@
         public delegate Task<TRequest> SendRequestCallback(Guid requestId, IPipe<SendContext<TRequest>> pipe, CancellationToken cancellationToken);
 
 
+        readonly IList<string> _accept;
         readonly CancellationToken _cancellationToken;
         readonly CancellationTokenSource _cancellationTokenSource;
         readonly ClientFactoryContext _context;
@@ -60,6 +61,7 @@
             _readyToSend = TaskUtil.GetTask<bool>();
             _cancellationTokenSource = new CancellationTokenSource();
             _responseHandlers = new Dictionary<Type, HandlerConnectHandle>();
+            _accept = new List<string>();
 
             if (cancellationToken != default && cancellationToken.CanBeCanceled)
                 _registration = cancellationToken.Register(Cancel);
@@ -68,9 +70,7 @@
 
             _send = SendRequest();
 
-        #pragma warning disable 4014
             HandleFault();
-        #pragma warning restore 4014
         }
 
         async Task IPipe<SendContext<TRequest>>.Send(SendContext<TRequest> context)
@@ -80,8 +80,10 @@
             context.RequestId = _requestId;
             context.ResponseAddress = _context.ResponseAddress;
 
+            context.Headers.Set(MessageHeaders.Request.Accept, _accept);
+
             if (_timeToLive.HasValue)
-                context.TimeToLive = _timeToLive.Value;
+                context.TimeToLive ??= _timeToLive.Value;
 
             IPipe<SendContext<TRequest>> pipe = _pipeConfigurator.Build();
 
@@ -119,6 +121,8 @@
         {
             Task<Response<T>> response = Response<T>();
 
+            AcceptResponse<T>();
+
             if (readyToSend)
                 _readyToSend.TrySetResult(true);
 
@@ -132,6 +136,12 @@
         }
 
         Task<TRequest> RequestHandle<TRequest>.Message => _message.Task;
+
+        void AcceptResponse<T>()
+            where T : class
+        {
+            _accept.Add(MessageUrn.ForTypeString<T>());
+        }
 
         async Task SendRequest()
         {
@@ -186,16 +196,18 @@
             return handle.Task;
         }
 
-        async Task HandleFault()
+        void HandleFault()
         {
-            try
-            {
-                await Response<Fault<TRequest>>(FaultHandler).ConfigureAwait(false);
-            }
-            catch
-            {
-                // need to observe the exception, if it is faulted
-            }
+            if (_cancellationToken.IsCancellationRequested)
+                return;
+
+            Task MessageHandler(ConsumeContext<Fault<TRequest>> context) => FaultHandler(context);
+
+            var connectHandle = _context.ConnectRequestHandler(_requestId, MessageHandler, new PipeConfigurator<ConsumeContext<Fault<TRequest>>>());
+
+            var handle = new FaultHandlerConnectHandle(connectHandle);
+
+            _responseHandlers.Add(typeof(Fault<TRequest>), handle);
         }
 
         Task FaultHandler(ConsumeContext<Fault<TRequest>> context)
@@ -223,9 +235,7 @@
 
                 _readyToSend.TrySetException(exception);
 
-                var cancel = _sendContext.TrySetException(exception);
-                if (cancel)
-                    _cancellationTokenSource.Cancel();
+                var wasSet = _sendContext.TrySetException(exception);
 
                 _message.TrySetException(exception);
 
@@ -234,6 +244,9 @@
                     handle.TrySetException(exception);
                     handle.Disconnect();
                 }
+
+                if (wasSet)
+                    _cancellationTokenSource.Cancel();
             }
 
             Task.Factory.StartNew(HandleFail, CancellationToken.None, TaskCreationOptions.None, _taskScheduler);
@@ -245,17 +258,19 @@
 
             DisposeTimer();
 
-            _readyToSend.TrySetCanceled();
+            _cancellationTokenSource.Cancel();
 
-            var cancel = _sendContext.TrySetCanceled();
-            if (cancel)
-                _cancellationTokenSource.Cancel();
+            var cancellationToken = _cancellationToken.IsCancellationRequested ? _cancellationToken : _cancellationTokenSource.Token;
+
+            _readyToSend.TrySetCanceled(cancellationToken);
+
+            _sendContext.TrySetCanceled(cancellationToken);
 
             _message.TrySetCanceled();
 
             foreach (var handle in _responseHandlers.Values)
             {
-                handle.TrySetCanceled();
+                handle.TrySetCanceled(cancellationToken);
                 handle.Disconnect();
             }
         }

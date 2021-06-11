@@ -4,27 +4,47 @@ namespace MassTransit.JobService.Components.StateMachines
     using System.Linq;
     using Automatonymous;
     using Automatonymous.Binders;
+    using Contracts.JobService;
     using GreenPipes;
-    using MassTransit.Contracts.JobService;
 
 
     public sealed class JobStateMachine :
         MassTransitStateMachine<JobSaga>
     {
+        readonly JobServiceOptions _options;
+
         public JobStateMachine(JobServiceOptions options)
         {
-            JobTypeSagaEndpointAddress = options.JobTypeSagaEndpointAddress;
-            JobSagaEndpointAddress = options.JobSagaEndpointAddress;
-            JobAttemptSagaEndpointAddress = options.JobAttemptSagaEndpointAddress;
+            _options = options;
 
             Event(() => JobSubmitted, x => x.CorrelateById(m => m.Message.JobId));
 
-            Event(() => JobSlotAllocated, x => x.CorrelateById(m => m.Message.JobId));
-            Event(() => JobSlotUnavailable, x => x.CorrelateById(m => m.Message.JobId));
-            Event(() => AllocateJobSlotFaulted, x => x.CorrelateById(m => m.Message.Message.JobId));
+            Event(() => JobSlotAllocated, x =>
+            {
+                x.CorrelateById(m => m.Message.JobId);
+                x.ConfigureConsumeTopology = false;
+            });
+            Event(() => JobSlotUnavailable, x =>
+            {
+                x.CorrelateById(m => m.Message.JobId);
+                x.ConfigureConsumeTopology = false;
+            });
+            Event(() => AllocateJobSlotFaulted, x =>
+            {
+                x.CorrelateById(m => m.Message.Message.JobId);
+                x.ConfigureConsumeTopology = false;
+            });
 
-            Event(() => JobAttemptCreated, x => x.CorrelateById(m => m.Message.JobId));
-            Event(() => StartJobAttemptFaulted, x => x.CorrelateById(m => m.Message.Message.JobId));
+            Event(() => JobAttemptCreated, x =>
+            {
+                x.CorrelateById(m => m.Message.JobId);
+                x.ConfigureConsumeTopology = false;
+            });
+            Event(() => StartJobAttemptFaulted, x =>
+            {
+                x.CorrelateById(m => m.Message.Message.JobId);
+                x.ConfigureConsumeTopology = false;
+            });
 
             Event(() => AttemptCanceled, x => x.CorrelateById(m => m.Message.JobId));
             Event(() => AttemptCompleted, x => x.CorrelateById(m => m.Message.JobId));
@@ -36,12 +56,20 @@ namespace MassTransit.JobService.Components.StateMachines
             Schedule(() => JobSlotWaitElapsed, instance => instance.JobSlotWaitToken, x =>
             {
                 x.Delay = options.SlotWaitTime;
-                x.Received = r => r.CorrelateById(context => context.Message.JobId);
+                x.Received = r =>
+                {
+                    r.CorrelateById(context => context.Message.JobId);
+                    r.ConfigureConsumeTopology = false;
+                };
             });
 
             Schedule(() => JobRetryDelayElapsed, instance => instance.JobRetryDelayToken, x =>
             {
-                x.Received = r => r.CorrelateById(context => context.Message.JobId);
+                x.Received = r =>
+                {
+                    r.CorrelateById(context => context.Message.JobId);
+                    r.ConfigureConsumeTopology = false;
+                };
             });
 
             InstanceState(x => x.CurrentState, Submitted, WaitingToStart, WaitingForSlot, Started, Completed, Faulted, Canceled, StartingJobAttempt,
@@ -49,7 +77,7 @@ namespace MassTransit.JobService.Components.StateMachines
 
             Initially(
                 When(JobSubmitted)
-                    .Then(OnJobSubmitted)
+                    .InitializeJob()
                     .RequestJobSlot(this));
 
             During(AllocatingJobSlot,
@@ -65,15 +93,12 @@ namespace MassTransit.JobService.Components.StateMachines
                     .RequestJobSlot(this));
 
             During(StartingJobAttempt,
-                When(JobAttemptCreated)
-                    .If(context => context.Data.AttemptId == context.Instance.AttemptId,
-                        x => x.TransitionTo(WaitingToStart)),
                 When(StartJobAttemptFaulted)
                     .Then(context =>
                     {
                         context.Instance.Reason = context.Data.Exceptions.FirstOrDefault()?.Message;
                     })
-                    .PublishJobFaulted()
+                    .NotifyJobFaulted()
                     .TransitionTo(Faulted));
 
             During(Started, Completed, Faulted,
@@ -93,20 +118,15 @@ namespace MassTransit.JobService.Components.StateMachines
                         context.Instance.Completed = context.Data.Timestamp;
                         context.Instance.Duration = context.Data.Duration;
                     })
-                    .PublishJobCompleted()
+                    .NotifyJobCompleted()
                     .TransitionTo(Completed));
-
-            During(Completed,
-                When(AttemptCompleted)
-                    .PublishJobCompleted(),
-                When(JobCompleted)
-                    .If(_ => options.FinalizeCompleted, x => x.Finalize()));
 
             During(StartingJobAttempt, WaitingToStart, Started,
                 When(AttemptFaulted)
                     .Then(context =>
                     {
                         context.Instance.Faulted = context.Data.Timestamp;
+                        context.Instance.Reason = context.Data.Exceptions?.Message ?? "Job Attempt Faulted (unknown reason)";
                     })
                     .IfElse(context => context.Data.RetryDelay.HasValue,
                         retry => retry
@@ -114,12 +134,24 @@ namespace MassTransit.JobService.Components.StateMachines
                                 context => context.Data.RetryDelay.Value)
                             .TransitionTo(WaitingToRetry),
                         fault => fault
-                            .PublishJobFaulted()
+                            .NotifyJobFaulted()
                             .TransitionTo(Faulted)));
+
+            During(Completed,
+                When(AttemptCompleted)
+                    .NotifyJobCompleted(),
+                When(AttemptStarted)
+                    .Then(context => context.Instance.Started = context.Data.Timestamp)
+                    .PublishJobStarted(),
+                When(JobCompleted)
+                    .If(_ => options.FinalizeCompleted, x => x.Finalize()));
 
             During(Faulted,
                 When(AttemptFaulted)
-                    .PublishJobFaulted());
+                    .NotifyJobFaulted(),
+                When(AttemptStarted)
+                    .Then(context => context.Instance.Started = context.Data.Timestamp)
+                    .PublishJobStarted());
 
             During(WaitingToRetry,
                 Ignore(AttemptFaulted),
@@ -137,6 +169,7 @@ namespace MassTransit.JobService.Components.StateMachines
                     .Then(context =>
                     {
                         context.Instance.Faulted = context.Data.Timestamp;
+                        context.Instance.Reason = "Job attempt canceled";
                     })
                     .PublishJobCanceled()
                     .TransitionTo(Canceled));
@@ -145,19 +178,21 @@ namespace MassTransit.JobService.Components.StateMachines
                 When(AttemptCanceled)
                     .PublishJobCanceled());
 
-            WhenEnter(Completed, x => x.SendJobSlotReleased(options.JobTypeSagaEndpointAddress));
-            WhenEnter(Canceled, x => x.SendJobSlotReleased(options.JobTypeSagaEndpointAddress));
-            WhenEnter(Faulted, x => x.SendJobSlotReleased(options.JobTypeSagaEndpointAddress));
-            WhenEnter(WaitingToRetry, x => x.SendJobSlotReleased(options.JobTypeSagaEndpointAddress));
+            WhenEnter(Completed, x => x.SendJobSlotReleased(this));
+            WhenEnter(Canceled, x => x.SendJobSlotReleased(this));
+            WhenEnter(Faulted, x => x.SendJobSlotReleased(this));
+            WhenEnter(WaitingToRetry, x => x.SendJobSlotReleased(this));
 
             SetCompletedWhenFinalized();
         }
 
-        public Uri JobTypeSagaEndpointAddress { get; }
-        public Uri JobSagaEndpointAddress { get; }
-        public Uri JobAttemptSagaEndpointAddress { get; }
+        public Uri JobTypeSagaEndpointAddress => _options.JobTypeSagaEndpointAddress;
+        public Uri JobSagaEndpointAddress => _options.JobSagaEndpointAddress;
+        public Uri JobAttemptSagaEndpointAddress => _options.JobAttemptSagaEndpointAddress;
 
+        //
         // ReSharper disable UnassignedGetOnlyAutoProperty
+        // ReSharper disable MemberCanBePrivate.Global
         public State Submitted { get; }
         public State WaitingToStart { get; }
         public State WaitingToRetry { get; }
@@ -188,47 +223,53 @@ namespace MassTransit.JobService.Components.StateMachines
         public Schedule<JobSaga, JobSlotWaitElapsed> JobSlotWaitElapsed { get; }
 
         public Schedule<JobSaga, JobRetryDelayElapsed> JobRetryDelayElapsed { get; }
-
-        static void OnJobSubmitted(BehaviorContext<JobSaga, JobSubmitted> context)
-        {
-            context.Instance.Submitted = context.Data.Timestamp;
-
-            context.Instance.Job = context.Data.Job;
-            context.Instance.ServiceAddress = context.GetPayload<ConsumeContext>().SourceAddress;
-            context.Instance.JobTimeout = context.Data.JobTimeout;
-            context.Instance.JobTypeId = context.Data.JobTypeId;
-
-            context.Instance.AttemptId = NewId.NextGuid();
-        }
     }
 
 
     static class JobStateMachineBehaviorExtensions
     {
+        public static EventActivityBinder<JobSaga, JobSubmitted> InitializeJob(this EventActivityBinder<JobSaga, JobSubmitted> binder)
+        {
+            return binder.Then(context =>
+            {
+                context.Instance.Submitted = context.Data.Timestamp;
+
+                context.Instance.Job = context.Data.Job;
+                context.Instance.ServiceAddress = context.GetPayload<ConsumeContext>().SourceAddress;
+                context.Instance.JobTimeout = context.Data.JobTimeout;
+                context.Instance.JobTypeId = context.Data.JobTypeId;
+
+                context.Instance.AttemptId = NewId.NextGuid();
+            });
+        }
+
         public static EventActivityBinder<JobSaga, T> RequestJobSlot<T>(this EventActivityBinder<JobSaga, T> binder,
             JobStateMachine machine)
             where T : class
         {
-            return binder.SendAsync(machine.JobTypeSagaEndpointAddress, context => context.Init<AllocateJobSlot>(new
-                {
-                    JobId = context.Instance.CorrelationId,
-                    context.Instance.JobTypeId,
-                    context.Instance.JobTimeout
-                }), context => context.ResponseAddress = machine.JobSagaEndpointAddress)
+            return binder.SendAsync(context => machine.JobTypeSagaEndpointAddress,
+                    context => context.Init<AllocateJobSlot>(new
+                    {
+                        JobId = context.Instance.CorrelationId,
+                        context.Instance.JobTypeId,
+                        context.Instance.JobTimeout
+                    }), context => context.ResponseAddress = machine.JobSagaEndpointAddress)
                 .TransitionTo(machine.AllocatingJobSlot);
         }
 
         public static EventActivityBinder<JobSaga, JobSlotAllocated> RequestStartJob(this EventActivityBinder<JobSaga, JobSlotAllocated> binder,
             JobStateMachine machine)
         {
-            return binder.SendAsync(machine.JobAttemptSagaEndpointAddress, context => context.Init<StartJobAttempt>(new
-                {
-                    JobId = context.Instance.CorrelationId,
-                    context.Instance.AttemptId,
-                    context.Instance.ServiceAddress,
-                    context.Instance.RetryAttempt,
-                    context.Instance.Job
-                }), context => context.ResponseAddress = machine.JobSagaEndpointAddress)
+            return binder.SendAsync(context => machine.JobAttemptSagaEndpointAddress,
+                    context => context.Init<StartJobAttempt>(new
+                    {
+                        JobId = context.Instance.CorrelationId,
+                        context.Instance.AttemptId,
+                        context.Instance.ServiceAddress,
+                        context.Data.InstanceAddress,
+                        context.Instance.RetryAttempt,
+                        context.Instance.Job
+                    }), context => context.ResponseAddress = machine.JobSagaEndpointAddress)
                 .TransitionTo(machine.StartingJobAttempt);
         }
 
@@ -239,13 +280,14 @@ namespace MassTransit.JobService.Components.StateMachines
                 .TransitionTo(machine.WaitingForSlot);
         }
 
-        public static EventActivityBinder<JobSaga> SendJobSlotReleased(this EventActivityBinder<JobSaga> binder, Uri destinationAddress)
+        public static EventActivityBinder<JobSaga> SendJobSlotReleased(this EventActivityBinder<JobSaga> binder, JobStateMachine machine)
         {
-            return binder.SendAsync(destinationAddress, context => context.Init<JobSlotReleased>(new
-            {
-                JobId = context.Instance.CorrelationId,
-                context.Instance.JobTypeId
-            }));
+            return binder.SendAsync(context => machine.JobTypeSagaEndpointAddress,
+                context => context.Init<JobSlotReleased>(new
+                {
+                    JobId = context.Instance.CorrelationId,
+                    context.Instance.JobTypeId
+                }));
         }
 
         public static EventActivityBinder<JobSaga, JobAttemptStarted> PublishJobStarted(this EventActivityBinder<JobSaga, JobAttemptStarted> binder)
@@ -259,9 +301,16 @@ namespace MassTransit.JobService.Components.StateMachines
             }));
         }
 
-        public static EventActivityBinder<JobSaga, JobAttemptCompleted> PublishJobCompleted(this EventActivityBinder<JobSaga, JobAttemptCompleted> binder)
+        public static EventActivityBinder<JobSaga, JobAttemptCompleted> NotifyJobCompleted(this EventActivityBinder<JobSaga, JobAttemptCompleted> binder)
         {
-            return binder.PublishAsync(context => context.Init<JobCompleted>(new
+            return binder.SendAsync(context => context.Instance.ServiceAddress,
+                context => context.Init<CompleteJob>(new
+                {
+                    JobId = context.Instance.CorrelationId,
+                    context.Instance.Job,
+                    context.Data.Timestamp,
+                    Duration = context.Data.Timestamp - context.Instance.Started ?? TimeSpan.Zero
+                })).PublishAsync(context => context.Init<JobCompleted>(new
             {
                 JobId = context.Instance.CorrelationId,
                 context.Instance.Job,
@@ -270,15 +319,25 @@ namespace MassTransit.JobService.Components.StateMachines
             }));
         }
 
-        public static EventActivityBinder<JobSaga, JobAttemptFaulted> PublishJobFaulted(this EventActivityBinder<JobSaga, JobAttemptFaulted> binder)
+        public static EventActivityBinder<JobSaga, JobAttemptFaulted> NotifyJobFaulted(this EventActivityBinder<JobSaga, JobAttemptFaulted> binder)
         {
             return binder.PublishAsync(context => context.Init<JobFaulted>(new
             {
                 JobId = context.Instance.CorrelationId,
                 context.Instance.Job,
                 context.Data.Exceptions,
-                context.Data.Timestamp
-            }));
+                context.Data.Timestamp,
+                Duration = context.Data.Timestamp - context.Instance.Started
+            })).SendAsync(context => context.Instance.ServiceAddress,
+                context => context.Init<FaultJob>(new
+                {
+                    JobId = context.Instance.CorrelationId,
+                    context.Instance.Job,
+                    context.Instance.AttemptId,
+                    context.Instance.RetryAttempt,
+                    context.Data.Exceptions,
+                    Duration = context.Data.Timestamp - context.Instance.Started
+                }));
         }
 
         public static EventActivityBinder<JobSaga, JobAttemptCanceled> PublishJobCanceled(this EventActivityBinder<JobSaga, JobAttemptCanceled> binder)
@@ -290,14 +349,24 @@ namespace MassTransit.JobService.Components.StateMachines
             }));
         }
 
-        public static EventActivityBinder<JobSaga, Fault<StartJobAttempt>> PublishJobFaulted(this EventActivityBinder<JobSaga, Fault<StartJobAttempt>> binder)
+        public static EventActivityBinder<JobSaga, Fault<StartJobAttempt>> NotifyJobFaulted(this EventActivityBinder<JobSaga, Fault<StartJobAttempt>> binder)
         {
-            return binder.PublishAsync(context => context.Init<JobFaulted>(new
+            return binder.SendAsync(context => context.Instance.ServiceAddress,
+                context => context.Init<FaultJob>(new
+                {
+                    JobId = context.Instance.CorrelationId,
+                    context.Instance.Job,
+                    context.Instance.AttemptId,
+                    context.Instance.RetryAttempt,
+                    context.Data.Exceptions,
+                    Duration = context.Data.Timestamp - context.Instance.Started
+                })).PublishAsync(context => context.Init<JobFaulted>(new
             {
                 JobId = context.Instance.CorrelationId,
                 context.Instance.Job,
+                context.Data.Exceptions,
                 context.Data.Timestamp,
-                context.Data.Exceptions
+                Duration = context.Data.Timestamp - context.Instance.Started
             }));
         }
     }

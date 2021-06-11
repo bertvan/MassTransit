@@ -4,33 +4,24 @@ namespace MassTransit.Registration
     using System.Collections.Generic;
     using System.Linq;
     using ConsumeConfigurators;
-    using Monitoring.Health;
-    using Riders;
     using Saga;
 
 
     public class RiderRegistrationContext :
         IRiderRegistrationContext
     {
-        readonly BusHealth _health;
         readonly IRegistration _registration;
         readonly IRegistrationCache<object> _registrations;
 
-        public RiderRegistrationContext(IRegistration registration, BusHealth health, IRegistrationCache<object> registrations)
+        public RiderRegistrationContext(IRegistration registration, IRegistrationCache<object> registrations)
         {
             _registration = registration;
-            _health = health;
             _registrations = registrations;
         }
 
         public IEnumerable<T> GetRegistrations<T>()
         {
             return _registrations.Values.OfType<T>();
-        }
-
-        public void UseHealthCheck(IRiderFactoryConfigurator configurator)
-        {
-            configurator.ConnectReceiveEndpointObserver(_health);
         }
 
         public object GetService(Type serviceType)
@@ -101,6 +92,17 @@ namespace MassTransit.Registration
         public void ConfigureActivityCompensate(Type activityType, IReceiveEndpointConfigurator compensateEndpointConfigurator)
         {
             _registration.ConfigureActivityCompensate(activityType, compensateEndpointConfigurator);
+        }
+
+        public void ConfigureFuture(Type futureType, IReceiveEndpointConfigurator configurator)
+        {
+            _registration.ConfigureFuture(futureType, configurator);
+        }
+
+        public void ConfigureFuture<T>(IReceiveEndpointConfigurator configurator)
+            where T : class, ISaga
+        {
+            _registration.ConfigureFuture<T>(configurator);
         }
     }
 }

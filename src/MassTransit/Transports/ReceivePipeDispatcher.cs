@@ -3,6 +3,7 @@ namespace MassTransit.Transports
     using System;
     using System.Threading;
     using System.Threading.Tasks;
+    using Configuration;
     using Context;
     using GreenPipes;
     using Logging;
@@ -14,7 +15,7 @@ namespace MassTransit.Transports
     public class ReceivePipeDispatcher :
         IReceivePipeDispatcher
     {
-        readonly ILogContext _logContext;
+        readonly IHostConfiguration _hostConfiguration;
         readonly ReceiveObservable _observers;
         readonly IReceivePipe _receivePipe;
 
@@ -22,11 +23,11 @@ namespace MassTransit.Transports
         long _dispatchCount;
         int _maxConcurrentDispatchCount;
 
-        public ReceivePipeDispatcher(IReceivePipe receivePipe, ReceiveObservable observers, ILogContext logContext)
+        public ReceivePipeDispatcher(IReceivePipe receivePipe, ReceiveObservable observers, IHostConfiguration hostConfiguration)
         {
             _receivePipe = receivePipe;
             _observers = observers;
-            _logContext = logContext;
+            _hostConfiguration = hostConfiguration;
         }
 
         public int ActiveDispatchCount => _activeDispatchCount;
@@ -42,7 +43,7 @@ namespace MassTransit.Transports
 
         public async Task Dispatch(ReceiveContext context, ReceiveLockContext receiveLock = default)
         {
-            LogContext.Current = _logContext;
+            LogContext.SetCurrentIfNull(_hostConfiguration.ReceiveLogContext);
 
             var active = StartDispatch();
 
@@ -71,7 +72,16 @@ namespace MassTransit.Transports
                     await _observers.ReceiveFault(context, ex).ConfigureAwait(false);
 
                 if (receiveLock != null)
-                    await receiveLock.Faulted(ex).ConfigureAwait(false);
+                {
+                    try
+                    {
+                        await receiveLock.Faulted(ex).ConfigureAwait(false);
+                    }
+                    catch (Exception releaseLockException)
+                    {
+                        throw new AggregateException("ReceiveLock.Faulted threw an exception", releaseLockException, ex);
+                    }
+                }
 
                 throw;
             }
@@ -99,10 +109,27 @@ namespace MassTransit.Transports
             return _receivePipe.ConnectConsumePipe(pipe);
         }
 
+        public ConnectHandle ConnectConsumePipe<T>(IPipe<ConsumeContext<T>> pipe, ConnectPipeOptions options)
+            where T : class
+        {
+            return _receivePipe.ConnectConsumePipe(pipe, options);
+        }
+
         public ConnectHandle ConnectRequestPipe<T>(Guid requestId, IPipe<ConsumeContext<T>> pipe)
             where T : class
         {
             return _receivePipe.ConnectRequestPipe(requestId, pipe);
+        }
+
+        public ConnectHandle ConnectConsumeObserver(IConsumeObserver observer)
+        {
+            return _receivePipe.ConnectConsumeObserver(observer);
+        }
+
+        public ConnectHandle ConnectConsumeMessageObserver<T>(IConsumeMessageObserver<T> observer)
+            where T : class
+        {
+            return _receivePipe.ConnectConsumeMessageObserver(observer);
         }
 
         ActiveDispatch StartDispatch()

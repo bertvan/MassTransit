@@ -58,6 +58,9 @@ namespace MassTransit.Context
 
         public bool IsDelivered { get; private set; }
         public bool IsFaulted { get; private set; }
+
+        public bool PublishFaults => _receiveEndpointContext.PublishFaults;
+
         public ISendEndpointProvider SendEndpointProvider => _sendEndpointProvider.Value;
         public IPublishEndpointProvider PublishEndpointProvider => _publishEndpointProvider.Value;
         public IPublishTopology PublishTopology => _receiveEndpointContext.Publish;
@@ -122,13 +125,13 @@ namespace MassTransit.Context
 
         protected virtual ContentType GetContentType()
         {
-            if (_headers.Value.TryGetHeader("Content-Type", out var contentTypeHeader))
+            if (_headers.Value.TryGetHeader("Content-Type", out var contentTypeHeader) || _headers.Value.TryGetHeader("ContentType", out contentTypeHeader))
             {
                 if (contentTypeHeader is ContentType contentType)
                     return contentType;
 
                 if (contentTypeHeader is string contentTypeString)
-                    return new ContentType(contentTypeString);
+                    return ConvertToContentType(contentTypeString);
             }
 
             return default;
@@ -137,6 +140,18 @@ namespace MassTransit.Context
         public void Cancel()
         {
             _cancellationTokenSource.Cancel();
+        }
+
+        protected static ContentType ConvertToContentType(string text)
+        {
+            try
+            {
+                return new ContentType(text);
+            }
+            catch (FormatException)
+            {
+                return default;
+            }
         }
 
 

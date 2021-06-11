@@ -2,6 +2,7 @@ namespace MassTransit.ActiveMqTransport.Tests
 {
     namespace ConductorTests
     {
+        using System.Collections.Generic;
         using System.Threading.Tasks;
         using Contracts;
         using Definition;
@@ -54,13 +55,16 @@ namespace MassTransit.ActiveMqTransport.Tests
             [Test]
             public async Task Should_connect_using_the_service_client()
             {
-                var serviceClient = Bus.CreateServiceClient();
-
-                IRequestClient<DeployPayload> requestClient = serviceClient.CreateRequestClient<DeployPayload>();
+                IRequestClient<DeployPayload> requestClient = Bus.CreateRequestClient<DeployPayload>();
 
                 Response<PayloadDeployed> response = await requestClient.GetResponse<PayloadDeployed>(new {Target = "Bogey"});
 
                 Assert.That(response.Message.Target, Is.EqualTo("Bogey"));
+            }
+
+            protected override void ConfigureActiveMqHost(IActiveMqHostConfigurator configurator)
+            {
+                configurator.TransportOptions(new Dictionary<string, string> {{"nms.useCompression", "true"}});
             }
 
             protected override void ConfigureActiveMqBus(IActiveMqBusFactoryConfigurator configurator)

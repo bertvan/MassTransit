@@ -29,8 +29,7 @@ namespace MassTransit.AutofacIntegration.Registration
             IBusRegistrationContext CreateRegistrationContext(IComponentContext context)
             {
                 var provider = context.Resolve<IConfigurationServiceProvider>();
-                var busHealth = context.Resolve<BusHealth>();
-                return new BusRegistrationContext(provider, busHealth, Endpoints, Consumers, Sagas, ExecuteActivities, Activities);
+                return new BusRegistrationContext(provider, Endpoints, Consumers, Sagas, ExecuteActivities, Activities, Futures);
             }
 
             Builder = builder;
@@ -43,8 +42,8 @@ namespace MassTransit.AutofacIntegration.Registration
                 .As<IBusDepot>()
                 .SingleInstance();
 
-            Builder.Register(context => new BusHealth(nameof(IBus)))
-                .As<BusHealth>()
+            Builder.RegisterType<BusHealth>()
+            #pragma warning disable 618
                 .As<IBusHealth>()
                 .SingleInstance();
 
@@ -104,6 +103,7 @@ namespace MassTransit.AutofacIntegration.Registration
 
             Builder.Register(context => CreateBus(busFactory, context))
                 .As<IBusInstance>()
+                .As<IReceiveEndpointConnector>()
                 .SingleInstance();
 
             Builder.Register(context => context.Resolve<IBusInstance>().BusControl)

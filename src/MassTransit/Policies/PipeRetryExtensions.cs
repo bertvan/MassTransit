@@ -31,6 +31,8 @@ namespace MassTransit.Policies
                 try
                 {
                     await Attempt(inlinePipeContext, retryContext, retryMethod).ConfigureAwait(false);
+
+                    return;
                 }
                 catch (OperationCanceledException ex) when (ex.CancellationToken == cancellationToken)
                 {
@@ -83,7 +85,7 @@ namespace MassTransit.Policies
         {
             while (context.CancellationToken.IsCancellationRequested == false)
             {
-                LogContext.Debug?.Log(retryContext.Exception, "Retrying {Delay}: {Message}", retryContext.Delay, retryContext.Exception.Message);
+                LogContext.Warning?.Log(retryContext.Exception, "Retrying {Delay}: {Message}", retryContext.Delay, retryContext.Exception.Message);
 
                 try
                 {
@@ -91,9 +93,11 @@ namespace MassTransit.Policies
                         await Task.Delay(retryContext.Delay.Value, context.CancellationToken).ConfigureAwait(false);
 
                     if (!context.CancellationToken.IsCancellationRequested)
+                    {
                         await retryMethod().ConfigureAwait(false);
 
-                    return;
+                        return;
+                    }
                 }
                 catch (OperationCanceledException exception) when (exception.CancellationToken == context.CancellationToken)
                 {
@@ -117,7 +121,7 @@ namespace MassTransit.Policies
         {
             while (context.CancellationToken.IsCancellationRequested == false)
             {
-                LogContext.Debug?.Log(retryContext.Exception, "Retrying {Delay}: {Message}", retryContext.Delay, retryContext.Exception.Message);
+                LogContext.Warning?.Log(retryContext.Exception, "Retrying {Delay}: {Message}", retryContext.Delay, retryContext.Exception.Message);
 
                 try
                 {

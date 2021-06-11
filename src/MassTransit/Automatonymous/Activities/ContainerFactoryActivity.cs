@@ -7,7 +7,7 @@
 
     public class ContainerFactoryActivity<TInstance, TActivity> :
         Activity<TInstance>
-        where TActivity : Activity<TInstance>
+        where TActivity : class, Activity<TInstance>
     {
         void Visitable.Accept(StateMachineVisitor visitor)
         {
@@ -18,7 +18,7 @@
         {
             var factory = context.GetStateMachineActivityFactory();
 
-            Activity<TInstance> activity = factory.GetActivity<TActivity, TInstance>(context);
+            Activity<TInstance> activity = factory.GetService<TActivity>(context);
 
             return activity.Execute(context, next);
         }
@@ -27,7 +27,7 @@
         {
             var factory = context.GetStateMachineActivityFactory();
 
-            Activity<TInstance> activity = factory.GetActivity<TActivity, TInstance>(context);
+            Activity<TInstance> activity = factory.GetService<TActivity>(context);
 
             var widenBehavior = new WidenBehavior<TInstance, T>(next, context);
 
@@ -53,7 +53,7 @@
 
     public class ContainerFactoryActivity<TInstance, TData, TActivity> :
         Activity<TInstance, TData>
-        where TActivity : Activity<TInstance, TData>
+        where TActivity : class, Activity<TInstance, TData>
     {
         void Visitable.Accept(StateMachineVisitor visitor)
         {
@@ -69,7 +69,7 @@
         {
             var factory = context.GetStateMachineActivityFactory();
 
-            Activity<TInstance, TData> activity = factory.GetActivity<TActivity, TInstance, TData>(context);
+            Activity<TInstance, TData> activity = factory.GetService<TActivity>(context);
 
             return activity.Execute(context, next);
         }

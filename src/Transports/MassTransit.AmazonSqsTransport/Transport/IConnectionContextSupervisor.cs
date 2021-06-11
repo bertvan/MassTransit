@@ -1,15 +1,18 @@
 namespace MassTransit.AmazonSqsTransport.Transport
 {
-    using GreenPipes.Agents;
+    using System;
+    using System.Threading.Tasks;
+    using Transports;
 
 
-    /// <summary>
-    /// Attaches a connection context to the value (shared, of course)
-    /// </summary>
     public interface IConnectionContextSupervisor :
-        ISupervisor<ConnectionContext>,
-        ISendTransportProvider,
-        IPublishTransportProvider
+        ITransportSupervisor<ConnectionContext>
     {
+        Uri NormalizeAddress(Uri address);
+
+        Task<ISendTransport> CreateSendTransport(IClientContextSupervisor clientContextSupervisor, Uri address);
+
+        Task<ISendTransport> CreatePublishTransport<T>(IClientContextSupervisor clientContextSupervisor)
+            where T : class;
     }
 }

@@ -5,7 +5,7 @@
     using BusConfigurators;
     using Configuration;
     using GreenPipes;
-    using MassTransit.Builders;
+    using MassTransit.Configuration;
     using Topology;
     using Topology.Settings;
 
@@ -27,24 +27,14 @@
 
             var queueName = busConfiguration.Topology.Consume.CreateTemporaryQueueName("bus");
             var exchangeType = busConfiguration.BusEndpointConfiguration.Topology.Consume.ExchangeTypeSelector.DefaultExchangeType;
-            _settings = new RabbitMqReceiveSettings(queueName, exchangeType, false, true);
+            _settings = new RabbitMqReceiveSettings(busConfiguration.BusEndpointConfiguration, queueName, exchangeType, false, true);
 
             _settings.AutoDeleteAfter(TimeSpan.FromMinutes(1));
         }
 
-        public IBusControl CreateBus()
+        public IReceiveEndpointConfiguration CreateBusEndpointConfiguration(Action<IReceiveEndpointConfigurator> configure)
         {
-            void ConfigureBusEndpoint(IRabbitMqReceiveEndpointConfigurator configurator)
-            {
-                configurator.ConfigureConsumeTopology = false;
-            }
-
-            var busReceiveEndpointConfiguration = _busConfiguration.HostConfiguration
-                .CreateReceiveEndpointConfiguration(_settings, _busConfiguration.BusEndpointConfiguration, ConfigureBusEndpoint);
-
-            var builder = new ConfigurationBusBuilder(_busConfiguration, busReceiveEndpointConfiguration);
-
-            return builder.Build();
+            return _busConfiguration.HostConfiguration.CreateReceiveEndpointConfiguration(_settings, _busConfiguration.BusEndpointConfiguration, configure);
         }
 
         public override IEnumerable<ValidationResult> Validate()
@@ -54,11 +44,6 @@
 
             if (string.IsNullOrWhiteSpace(_settings.QueueName))
                 yield return this.Failure("Bus", "The bus queue name must not be null or empty");
-        }
-
-        public ushort PrefetchCount
-        {
-            set => _settings.PrefetchCount = value;
         }
 
         public bool Durable
@@ -106,6 +91,11 @@
             set => _settings.QueueExpiration = value;
         }
 
+        public bool SingleActiveConsumer
+        {
+            set => _settings.SingleActiveConsumer = value;
+        }
+
         public void SetQueueArgument(string key, object value)
         {
             _settings.SetQueueArgument(key, value);
@@ -129,6 +119,11 @@
         public void EnablePriority(byte maxPriority)
         {
             _settings.EnablePriority(maxPriority);
+        }
+
+        public void SetQuorumQueue(int? replicationFactor = default)
+        {
+            _settings.SetQuorumQueue(replicationFactor);
         }
 
         public void Host(RabbitMqHostSettings settings)

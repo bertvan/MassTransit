@@ -6,6 +6,8 @@
     using Contexts;
     using GreenPipes;
     using MassTransit.Builders;
+    using MassTransit.Pipeline;
+    using Pipeline;
     using Topology;
     using Topology.Builders;
     using Transport;
@@ -25,29 +27,26 @@
             _configuration = configuration;
         }
 
-        public override ConnectHandle ConnectConsumePipe<T>(IPipe<ConsumeContext<T>> pipe)
+        public override ConnectHandle ConnectConsumePipe<T>(IPipe<ConsumeContext<T>> pipe, ConnectPipeOptions options)
         {
-            if (_configuration.ConfigureConsumeTopology)
+            if (_configuration.ConfigureConsumeTopology && options.HasFlag(ConnectPipeOptions.ConfigureConsumeTopology))
             {
-                var subscriptionName = GenerateSubscriptionName();
-
-                _configuration.Topology.Consume
-                    .GetMessageTopology<T>()
-                    .Subscribe(subscriptionName);
+                IServiceBusMessageConsumeTopologyConfigurator<T> topology = _configuration.Topology.Consume.GetMessageTopology<T>();
+                if (topology.ConfigureConsumeTopology)
+                {
+                    var subscriptionName = GenerateSubscriptionName();
+                    topology.Subscribe(subscriptionName);
+                }
             }
 
-            return base.ConnectConsumePipe(pipe);
+            return base.ConnectConsumePipe(pipe, options);
         }
 
         public ServiceBusReceiveEndpointContext CreateReceiveEndpointContext()
         {
             var topologyLayout = BuildTopology(_configuration.Settings);
 
-            var context = new ServiceBusEntityReceiveEndpointContext(_hostConfiguration, _configuration, topologyLayout);
-
-            context.GetOrAddPayload(() => _hostConfiguration.HostTopology);
-
-            return context;
+            return new ServiceBusEntityReceiveEndpointContext(_hostConfiguration, _configuration, topologyLayout, ClientContextFactory);
         }
 
         string GenerateSubscriptionName()
@@ -67,6 +66,12 @@
             _configuration.Topology.Consume.Apply(topologyBuilder);
 
             return topologyBuilder.BuildBrokerTopology();
+        }
+
+        IClientContextSupervisor ClientContextFactory()
+        {
+            return _hostConfiguration.ConnectionContextSupervisor
+                .CreateClientContextSupervisor(supervisor => new QueueClientContextFactory(supervisor, _configuration.Settings));
         }
     }
 }

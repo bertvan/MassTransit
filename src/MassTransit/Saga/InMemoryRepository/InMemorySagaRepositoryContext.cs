@@ -72,7 +72,13 @@ namespace MassTransit.Saga.InMemoryRepository
                 if (_sagas[instance.CorrelationId] != null)
                     return default;
 
-                return await _factory.CreateSagaConsumeContext(_sagas, _context, instance, SagaConsumeContextMode.Insert).ConfigureAwait(false);
+                SagaConsumeContext<TSaga, TMessage> consumeContext =
+                    await _factory.CreateSagaConsumeContext(_sagas, _context, instance, SagaConsumeContextMode.Insert).ConfigureAwait(false);
+
+                _sagas.Release();
+                _sagasLocked = false;
+
+                return consumeContext;
             }
 
             await _sagas.MarkInUse(_context.CancellationToken).ConfigureAwait(false);
@@ -160,6 +166,11 @@ namespace MassTransit.Saga.InMemoryRepository
         public Task Discard(SagaConsumeContext<TSaga> context)
         {
             return Delete(context);
+        }
+
+        public Task Undo(SagaConsumeContext<TSaga> context)
+        {
+            return TaskUtil.Completed;
         }
 
         public Task<SagaConsumeContext<TSaga, T>> CreateSagaConsumeContext<T>(ConsumeContext<T> consumeContext, TSaga instance, SagaConsumeContextMode mode)

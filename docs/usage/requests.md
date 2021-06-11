@@ -23,7 +23,7 @@ public interface OrderStatusResult
 }
 ```
 
-## Request Consumer
+### Request Consumer
 
 In order for the request to return anything, it needs to be handled. Handling requests is done by using normal consumers. The only difference is that such consumer needs to send a response back.
 
@@ -57,13 +57,227 @@ public class CheckOrderStatusConsumer :
 }
 ```
 
-The response will be sent back to the requestor. In case the exception is thrown, MassTransit will create a `Fault<CheckOrderStatus>` message and send it back to the requestor. The requestor address is available in the consume context of the request message as `context.ResponseAddress`.
+The response will be sent back to the requester. In case the exception is thrown, MassTransit will create a `Fault<CheckOrderStatus>` message and send it back to the requester. The requester address is available in the consume context of the request message as `context.ResponseAddress`.
 
-## Request Client
+### Request Client Configuration
+
+> Uses [MassTransit.ExtensionsDependencyInjection](https://www.nuget.org/packages/MassTransit.Extensions.DependencyInjection/)
+> or [MassTransit.AspNetCore](https://www.nuget.org/packages/MassTransit.AspNetCore/)
 
 Most interactions of the request/response nature consist of four elements: the request arguments, the response values, exception handling, and the time to wait for a response. The .NET framework gives us one additional element, a `CancellationToken` which can prematurely cancel waiting for the response.
 
-In MassTransit, the request client is composed of two parts, a client factory, and a request client. The client factory is created from the bus, or a connected endpoint, and has the interface below (some overloads are omitted, but you get the idea).
+MassTransit includes a request client which encapsulates the request/response messaging pattern.
+
+To register a request client, MassTransit has registration methods to ensure request clients are properly registered. To configure the request client, use the `AddRequestClient` method as shown below. In this case, no destination address is specified, however it is possible to specify the destination address for the request. The default request timeout may also be specified.
+
+```csharp
+public void ConfigureServices(IServiceCollection services)
+{
+    services.AddMassTransit(x =>
+    {
+        x.AddConsumer<CheckOrderStatusConsumer>();
+
+        x.UsingInMemory((context, cfg) =>
+        {
+            cfg.ConfigureEndpoints(context);
+        }));
+
+        x.AddRequestClient<CheckOrderStatus>();
+    })
+    .AddMassTransitHostedService();
+}
+```
+
+::: warning IMPORTANT
+In the example shown above, the bus is automatically started by including the MassTransit hosted service. The bus must always be started, so if the hosted service is not included, be sure to start the bus manually using `IBusControl`.
+:::
+
+Once registered, a controller (or another consumer) can use the client via a constructor dependency.
+
+```csharp
+public class RequestController :
+    Controller
+{
+    IRequestClient<CheckOrderStatus> _client;
+
+    public RequestController(IRequestClient<CheckOrderStatus> client)
+    {
+        _client = client;
+    }
+
+    public async Task<ActionResult> Get(string id)
+    {
+        var response = await _client.GetResponse<OrderStatusResult>(new {OrderId = id});
+
+        return View(response.Message);
+    }
+}
+```
+
+The controller method will send the command, and return the view once the result has been received.
+
+
+If multiple request clients are needed, there is a generic registration method available. Since no address is specified, the generic request client will publish the request, allowing the command to be routed to the consumer via the broker topology.
+
+```csharp
+public void ConfigureServices(IServiceCollection services)
+{
+    services.AddMassTransit(x =>
+    {
+        // ...
+
+        x.AddGenericRequestClient();
+    });
+}
+```
+#### Using Autofac
+
+> Uses [MassTransit.AutofacIntegration](https://www.nuget.org/packages/MassTransit.Autofac)
+
+To use the generic request client:
+```csharp
+ContainerBuilder builder;
+builder.RegisterGenericRequestClient();
+```
+
+Or choose one of the following for a typed request:
+```csharp
+ContainerBuilder builder;
+builder.AddMassTransit(x =>
+{
+    // Either this
+    x.AddRequestClient<OrderStatusResult>();
+
+    // Or this to specify a timeout
+    x.AddRequestClient<OrderStatusResult>(TimeSpan.FromSeconds(60));
+    
+    // ...
+});
+```
+
+### Customizing Requests
+
+To create a request, and add a header to the `SendContext`, use the _Create_ method which returns a _RequestHandle_ and then set the header using an execute filter as shown.
+
+```csharp
+using (var request = client.Create(new { OrderId = id})
+{
+    request.UseExecute(x => x.Headers.Set("custom-header", "some-value"));
+
+    var response = await request.GetResponse<OrderStatusResult>();
+}
+```
+
+Calling the `GetResponse` method triggers the request to be sent, after which the caller awaits the response. To add additional response types, see below for the tuple syntax, or just add multiple `GetResponse` methods, passing _false_ for the _readyToSend_ parameter.
+
+### Multiple Requests
+
+If there were multiple requests to be performed, it is easy to wait on all results at the same time, benefiting from the concurrent operation.
+
+```csharp
+public class RequestController : 
+    Controller
+{
+    IRequestClient<RequestA> _clientA;
+    IRequestClient<RequestB> _clientB;
+
+    public RequestController(IRequestClient<RequestA> clientA, IRequestClient<RequestB> clientB)
+    {
+        _clientA = clientA;
+        _clientB = clientB;
+    }
+
+    public async Task<ActionResult> Get()
+    {
+        var resultA = _clientA.GetResponse(new RequestA());
+        var resultB = _clientB.GetResponse(new RequestB());
+
+        await Task.WhenAll(resultA, resultB);
+
+        var a = await resultA;
+        var b = await resultB;
+
+        var model = new Model(a.Message, b.Message);
+
+        return View(model);
+    }
+}
+```
+
+The power of concurrency, for the win!
+
+### Multiple Response Types
+
+Another powerful feature with the request client is the ability support multiple (such as positive and negative) result types. For example, adding an `OrderNotFound` response type to the consumer as shown eliminates throwing an exception since a missing order isn't really a fault.
+
+```csharp
+public class CheckOrderStatusConsumer : 
+    IConsumer<CheckOrderStatus>
+{
+    public async Task Consume(ConsumeContext<CheckOrderStatus> context)
+    {
+        var order = await _orderRepository.Get(context.Message.OrderId);
+        if (order == null)
+            await context.RespondAsync<OrderNotFound>(context.Message);
+        else        
+            await context.RespondAsync<OrderStatusResult>(new 
+            {
+                OrderId = order.Id,
+                order.Timestamp,
+                order.StatusCode,
+                order.StatusText
+            });
+    }
+}
+```
+
+The client can now wait for multiple response types (in this case, two) by using a little tuple magic.
+
+```csharp
+var response = await client.GetResponse<OrderStatusResult, OrderNotFound>(new { OrderId = id});
+
+if (response.Is(out Response<OrderStatusResult> responseA))
+{
+    // do something with the order
+}
+else if (response.Is(out Response<OrderNotFound> responseB))
+{
+    // the order was not found
+}
+```
+
+This cleans up the processing, an eliminates the need to catch a `RequestFaultException`.
+
+It's also possible to use some of the switch expressions via deconstruction, but this requires the response variable to be explicitly specified as `Response`.
+
+```cs
+Response response = await client.GetResponse<OrderStatusResult, OrderNotFound>(new { OrderId = id});
+
+// Using a regular switch statement
+switch (response)
+{
+    case (_, OrderStatusResult a) responseA:
+        // order found
+        break;
+    case (_, OrderNotFound b) responseB:
+        // order not found
+        break;
+}
+
+// Or using a switch expression
+var accepted = response switch
+{
+    (_, OrderStatusResult a) => true,
+    (_, OrderNotFound b) => false,
+    _ => throw new InvalidOperationException()
+};
+```
+
+### Request Client Details
+
+> The internals are documented for understanding, but what follows is optional reading. The above container-based configuration handles all the details to ensure the property context is used.
+
+The request client is composed of two parts, a client factory, and a request client. The client factory is created from the bus, or a connected endpoint, and has the interface below (some overloads are omitted, but you get the idea).
 
 ```csharp
 public interface IClientFactory 
@@ -109,150 +323,5 @@ var response = await client.GetResponse<OrderStatusResult>(new { OrderId = id});
 
 The response type, `Response<OrderStatusResult>` includes the _MessageContext_ from when the response was received, providing access to the message properties (such as `response.ConversationId`) and headers (`response.Headers`). 
 
-To create a request, and add a header to the `SendContext`, use the _Create_ method which returns a _RequestHandle_ and then set the header using an execute filter as shown.
 
-```csharp
-using (var request = client.Create(new { OrderId = id})
-{
-    request.UseExecute(x => x.Headers.Set("custom-header", "some-value"));
 
-    var response = await request.GetResponse<OrderStatusResult>();
-}
-```
-
-Calling the `GetResponse` method triggers the request to be sent, after which the caller awaits the response. To add additional response types, see below for the tuple syntax, or just add multiple `GetResponse` methods, passing _false_ for the _readyToSend_ parameter.
-
-See below for examples of how to use the request client in different contexts.
-
-::: warning IMPORTANT
-MassTransit uses a temporary non-durable queue and has a consumer to handle responses. This temporary queue only get configured and created when you _start the bus_. If you forget to start the bus in your application code, the request client will fail with a timeout, waiting for a response.
-:::
-
-## Container Configuration
-
-To register a request client for use with ASP.NET Core, it is recommended to use the [MassTransit.ExtensionsDependencyInjection](https://www.nuget.org/packages/MassTransit.Extensions.DependencyInjection/) NuGet package. It can be used to setup ASP.NET to use MassTransit, and has registration methods to ensure consumers and request clients are properly registered.
-
-To configure the request client in ASP.NET, use the registration extension shown.
-
-```csharp
-public void ConfigureServices(IServiceCollection services)
-{
-    services.AddMassTransit(x =>
-    {
-        x.AddConsumer<CheckOrderStatusConsumer>();
-
-        x.UsingInMemory(cfg =>
-        {
-            cfg.ConfigureEndpoints(context);
-        }));
-
-        x.AddRequestClient<CheckOrderStatus>();
-    });
-}
-```
-
-Once registered, a controller can use the client via a constructor dependency.
-
-```csharp
-public class RequestController :
-    Controller
-{
-    IRequestClient<CheckOrderStatus> _client;
-
-    public RequestController(IRequestClient<CheckOrderStatus> client)
-    {
-        _client = client;
-    }
-
-    public async Task<ActionResult> Get(string id)
-    {
-        var response = await _client.GetResponse<OrderStatusResult>(new {OrderId = id});
-
-        return View(response.Message);
-    }
-}
-```
-
-The controller method will send the command, and return the view once the result has been received.
-
-## Multiple Requests
-
-If there were multiple requests to be performed, it is easy to wait on all results at the same time, benefiting from the concurrent operation.
-
-```csharp
-public class RequestController : 
-    Controller
-{
-    IRequestClient<RequestA> _clientA;
-    IRequestClient<RequestB> _clientB;
-
-    public RequestController(IRequestClient<RequestA> clientA, IRequestClient<RequestB> clientB)
-    {
-        _clientA = clientA;
-        _clientB = clientB;
-    }
-
-    public async Task<ActionResult> Get()
-    {
-        var resultA = _clientA.GetResponse(new RequestA());
-        var resultB = _clientB.GetResponse(new RequestB());
-
-        await Task.WhenAll(resultA, resultB);
-
-        var a = await resultA;
-        var b = await resultB;
-
-        var model = new Model(a.Message, b.Message);
-
-        return View(model);
-    }
-}
-```
-
-The power of concurrency, for the win!
-
-## Multiple Response Types
-
-Another powerful feature with the request client is the ability support multiple (such as positive and negative) result types. For example, adding an `OrderNotFound` response type to the consumer as shown eliminates throwing an exception since a missing order isn't really a fault.
-
-```csharp
-public class CheckOrderStatusConsumer : 
-    IConsumer<CheckOrderStatus>
-{
-    public async Task Consume(ConsumeContext<CheckOrderStatus> context)
-    {
-        var order = await _orderRepository.Get(context.Message.OrderId);
-        if (order == null)
-            await context.RespondAsync<OrderNotFound>(context.Message);
-        else        
-            await context.RespondAsync<OrderStatusResult>(new 
-            {
-                OrderId = order.Id,
-                order.Timestamp,
-                order.StatusCode,
-                order.StatusText
-            });
-    }
-}
-```
-
-The client can now wait for multiple response types (in this case, two) by using a little tuple magic.
-
-```csharp
-var (statusResponse,notFoundResponse) = await client.GetResponse<OrderStatusResult, OrderNotFound>(new { OrderId = id});
-
-// both tuple values are Task<Response<T>>, need to find out which one completed
-if(statusResponse.IsCompletedSuccessfully)
-{
-    var orderStatus = await statusResponse;
-    // do something
-}
-else
-{
-    var notFound = await notFoundResponse;
-    // do something else
-}
-
-```
-
-This cleans up the processing, an eliminates the need to catch a `RequestFaultException`.

@@ -1,12 +1,10 @@
 ﻿namespace MassTransit.Azure.ServiceBus.Core.Configuration
 {
     using System;
-    using GreenPipes;
     using MassTransit.Configuration;
     using Pipeline;
     using Settings;
     using Topology;
-    using Transport;
 
 
     public interface IServiceBusHostConfiguration :
@@ -19,11 +17,7 @@
 
         IConnectionContextSupervisor ConnectionContextSupervisor { get; }
 
-        IRetryPolicy RetryPolicy { get; }
-
         new IServiceBusHostTopology HostTopology { get; }
-
-        ISendEndpointContextSupervisor CreateSendEndpointContextSupervisor(SendSettings settings);
 
         /// <summary>
         /// Apply the endpoint definition to the receive endpoint configurator
@@ -39,7 +33,7 @@
             endpointConfiguration, Action<IServiceBusReceiveEndpointConfigurator> configure = null);
 
         IServiceBusSubscriptionEndpointConfiguration CreateSubscriptionEndpointConfiguration(SubscriptionEndpointSettings settings,
-            Action<IServiceBusSubscriptionEndpointConfigurator> configure = null);
+            IServiceBusEndpointConfiguration endpointConfiguration, Action<IServiceBusSubscriptionEndpointConfigurator> configure = null);
 
         void SubscriptionEndpoint<T>(string subscriptionName, Action<IServiceBusSubscriptionEndpointConfigurator> configure)
             where T : class;
@@ -51,5 +45,12 @@
         void SetNamespaceSeparatorToUnderscore();
 
         void SetNamespaceSeparatorTo(string separator);
+
+        IServiceBusSubscriptionEndpointConfiguration CreateSubscriptionEndpointConfiguration<T>(string subscriptionName,
+            Action<IServiceBusSubscriptionEndpointConfigurator> configure)
+            where T : class;
+
+        IServiceBusSubscriptionEndpointConfiguration CreateSubscriptionEndpointConfiguration(string subscriptionName, string topicPath,
+            Action<IServiceBusSubscriptionEndpointConfigurator> configure);
     }
 }

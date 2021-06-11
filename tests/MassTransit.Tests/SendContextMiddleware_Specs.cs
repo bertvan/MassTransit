@@ -23,7 +23,7 @@ namespace MassTransit.Tests
         [Test]
         public async Task Should_have_the_consume_context_available()
         {
-            Task<ConsumeContext<C>> handler = ConnectPublishHandler<C>();
+            Task<ConsumeContext<C>> handler = await ConnectPublishHandler<C>();
 
             EndpointConvention.Map<B>(InputQueueAddress);
 
@@ -144,7 +144,7 @@ namespace MassTransit.Tests
         {
             EndpointConvention.Map<B>(InputQueueAddress);
 
-            var sendObserver = new BusTestSendObserver(TimeSpan.FromSeconds(3), BusTestHarness.InactivityToken);
+            var sendObserver = new BusTestSendObserver(TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(1), BusTestHarness.InactivityToken);
 
             using (Bus.ConnectSendObserver(sendObserver))
             {
@@ -420,7 +420,7 @@ namespace MassTransit.Tests
         [Test]
         public async Task Should_contain_the_same_payloads()
         {
-            var publishObserver = new BusTestPublishObserver(TimeSpan.FromSeconds(3), BusTestHarness.InactivityToken);
+            var publishObserver = new BusTestPublishObserver(TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(1), BusTestHarness.InactivityToken);
 
             using (Bus.ConnectPublishObserver(publishObserver))
             {

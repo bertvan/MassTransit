@@ -4,6 +4,8 @@
     using System.Collections.Generic;
     using System.Linq;
     using Builders;
+    using Context;
+    using Contexts;
     using GreenPipes;
     using Pipeline;
     using Settings;
@@ -41,6 +43,11 @@
 
         public override Uri InputAddress => _inputAddress.Value;
 
+        public override ReceiveEndpointContext CreateReceiveEndpointContext()
+        {
+            return CreateServiceBusReceiveEndpointContext();
+        }
+
         IServiceBusTopologyConfiguration IServiceBusEndpointConfiguration.Topology => _endpointConfiguration.Topology;
 
         public override IEnumerable<ValidationResult> Validate()
@@ -51,16 +58,18 @@
 
         public void Build(IHost host)
         {
-            var builder = new ServiceBusReceiveEndpointBuilder(_hostConfiguration, this);
+            var context = CreateServiceBusReceiveEndpointContext();
 
-            ApplySpecifications(builder);
-
-            var receiveEndpointContext = builder.CreateReceiveEndpointContext();
-
-            ClientPipeConfigurator.UseFilter(new ConfigureTopologyFilter<ReceiveSettings>(_settings, receiveEndpointContext.BrokerTopology,
+            ClientPipeConfigurator.UseFilter(new ConfigureTopologyFilter<ReceiveSettings>(_settings, context.BrokerTopology,
                 _settings.RemoveSubscriptions, _hostConfiguration.ConnectionContextSupervisor.Stopping));
 
-            CreateReceiveEndpoint(host, receiveEndpointContext);
+            var errorTransport = CreateErrorTransport();
+            var deadLetterTransport = CreateDeadLetterTransport();
+
+            context.GetOrAddPayload(() => deadLetterTransport);
+            context.GetOrAddPayload(() => errorTransport);
+
+            CreateReceiveEndpoint(host, context);
         }
 
         public TimeSpan DuplicateDetectionHistoryTimeWindow
@@ -112,6 +121,15 @@
             ConfigureConsumeTopology = false;
         }
 
+        ServiceBusReceiveEndpointContext CreateServiceBusReceiveEndpointContext()
+        {
+            var builder = new ServiceBusReceiveEndpointBuilder(_hostConfiguration, this);
+
+            ApplySpecifications(builder);
+
+            return builder.CreateReceiveEndpointContext();
+        }
+
         Uri FormatInputAddress()
         {
             return _settings.GetInputAddress(_hostConfiguration.HostAddress, _settings.Path);
@@ -122,23 +140,18 @@
             return _inputAddress.IsValueCreated || base.IsAlreadyConfigured();
         }
 
-        protected override IErrorTransport CreateErrorTransport()
+        IErrorTransport CreateErrorTransport()
         {
             var settings = _endpointConfiguration.Topology.Send.GetErrorSettings(_settings.QueueConfigurator);
 
-            return new BrokeredMessageErrorTransport(_hostConfiguration.CreateSendEndpointContextSupervisor(settings));
+            return new BrokeredMessageErrorTransport(_hostConfiguration.ConnectionContextSupervisor, settings);
         }
 
-        protected override IDeadLetterTransport CreateDeadLetterTransport()
+        IDeadLetterTransport CreateDeadLetterTransport()
         {
             var settings = _endpointConfiguration.Topology.Send.GetDeadLetterSettings(_settings.QueueConfigurator);
 
-            return new BrokeredMessageDeadLetterTransport(_hostConfiguration.CreateSendEndpointContextSupervisor(settings));
-        }
-
-        protected override IClientContextSupervisor CreateClientContextSupervisor(IConnectionContextSupervisor supervisor)
-        {
-            return new ClientContextSupervisor(new QueueClientContextFactory(supervisor, _settings));
+            return new BrokeredMessageDeadLetterTransport(_hostConfiguration.ConnectionContextSupervisor, settings);
         }
     }
 }

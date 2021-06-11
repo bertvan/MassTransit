@@ -5,7 +5,7 @@
     using Configuration;
     using ConsumePipeSpecifications;
     using GreenPipes;
-    using Logging;
+    using GreenPipes.Agents;
     using Pipeline;
     using Pipeline.Observables;
     using Topology;
@@ -16,33 +16,37 @@
         BasePipeContext,
         ReceiveEndpointContext
     {
+        readonly IHostConfiguration _hostConfiguration;
         readonly ReceiveEndpointObservable _endpointObservers;
-        readonly ILogContext _logContext;
-        readonly Lazy<IPublishEndpointProvider> _publishEndpointProvider;
         readonly Lazy<IPublishPipe> _publishPipe;
         readonly IPublishTopologyConfigurator _publishTopology;
-        readonly Lazy<IPublishTransportProvider> _publishTransportProvider;
         readonly ReceiveObservable _receiveObservers;
         readonly Lazy<IReceivePipe> _receivePipe;
-        readonly Lazy<ISendEndpointProvider> _sendEndpointProvider;
         readonly Lazy<ISendPipe> _sendPipe;
-        readonly Lazy<ISendTransportProvider> _sendTransportProvider;
         readonly Lazy<IMessageSerializer> _serializer;
         readonly ReceiveTransportObservable _transportObservers;
 
         protected readonly PublishObservable PublishObservers;
         protected readonly SendObservable SendObservers;
 
-        protected BaseReceiveEndpointContext(IReceiveEndpointConfiguration configuration)
+        Lazy<IPublishEndpointProvider> _publishEndpointProvider;
+        Lazy<IPublishTransportProvider> _publishTransportProvider;
+        Lazy<ISendEndpointProvider> _sendEndpointProvider;
+        Lazy<ISendTransportProvider> _sendTransportProvider;
+
+        protected BaseReceiveEndpointContext(IHostConfiguration hostConfiguration, IReceiveEndpointConfiguration configuration)
         {
+            _hostConfiguration = hostConfiguration;
+
             InputAddress = configuration.InputAddress;
             HostAddress = configuration.HostAddress;
+            PublishFaults = configuration.PublishFaults;
+            PrefetchCount = configuration.PrefetchCount;
+            ConcurrentMessageLimit = configuration.ConcurrentMessageLimit;
 
             _publishTopology = configuration.Topology.Publish;
 
             ConsumePipeSpecification = configuration.Consume.Specification;
-
-            _logContext = LogContext.Current.CreateLogContext(LogCategoryName.Transport.Receive);
 
             SendObservers = new SendObservable();
             PublishObservers = new PublishObservable();
@@ -58,10 +62,10 @@
             _receivePipe = new Lazy<IReceivePipe>(configuration.CreateReceivePipe);
 
             _serializer = new Lazy<IMessageSerializer>(() => configuration.Serialization.Serializer);
-            _sendEndpointProvider = new Lazy<ISendEndpointProvider>(CreateSendEndpointProvider);
-            _publishEndpointProvider = new Lazy<IPublishEndpointProvider>(CreatePublishEndpointProvider);
-            _sendTransportProvider = new Lazy<ISendTransportProvider>(CreateSendTransportProvider);
-            _publishTransportProvider = new Lazy<IPublishTransportProvider>(CreatePublishTransportProvider);
+
+            Reset();
+
+            hostConfiguration.ConnectReceiveEndpointContext(this);
         }
 
         protected Uri HostAddress { get; }
@@ -107,7 +111,11 @@
 
         public Task Dependencies { get; }
 
-        ILogContext ReceiveEndpointContext.LogContext => _logContext;
+        public bool PublishFaults { get; }
+        public int PrefetchCount { get; }
+        public int? ConcurrentMessageLimit { get; }
+
+        ILogContext ReceiveEndpointContext.LogContext => _hostConfiguration.ReceiveLogContext;
 
         IPublishTopology ReceiveEndpointContext.Publish => _publishTopology;
 
@@ -119,8 +127,25 @@
 
         public IReceivePipeDispatcher CreateReceivePipeDispatcher()
         {
-            return new ReceivePipeDispatcher(_receivePipe.Value, _receiveObservers, _logContext);
+            return new ReceivePipeDispatcher(_receivePipe.Value, _receiveObservers, _hostConfiguration);
         }
+
+        public void Reset()
+        {
+            _sendTransportProvider = new Lazy<ISendTransportProvider>(CreateSendTransportProvider);
+            _publishTransportProvider = new Lazy<IPublishTransportProvider>(CreatePublishTransportProvider);
+
+            _sendEndpointProvider = new Lazy<ISendEndpointProvider>(CreateSendEndpointProvider);
+            _publishEndpointProvider = new Lazy<IPublishEndpointProvider>(CreatePublishEndpointProvider);
+        }
+
+        public abstract void AddConsumeAgent(IAgent agent);
+
+        public virtual void Probe(ProbeContext context)
+        {
+        }
+
+        public abstract Exception ConvertException(Exception exception, string message);
 
         protected virtual ISendEndpointProvider CreateSendEndpointProvider()
         {

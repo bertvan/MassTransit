@@ -1,5 +1,6 @@
 namespace MassTransit.Containers.Tests.StructureMap_Tests
 {
+    using System.Threading.Tasks;
     using Common_Tests;
     using NUnit.Framework;
     using Scenarios;
@@ -35,6 +36,27 @@ namespace MassTransit.Containers.Tests.StructureMap_Tests
 
 
     [TestFixture]
+    public class StructureMap_Consumer_ConfigureEndpoint :
+        Common_Consumer_ConfigureEndpoint
+    {
+        readonly IContainer _container;
+
+        public StructureMap_Consumer_ConfigureEndpoint()
+        {
+            _container = new Container(expression =>
+            {
+                expression.AddMassTransit(ConfigureRegistration);
+
+                expression.For<IConfigureReceiveEndpoint>()
+                    .Add<DoNotPublishFaults>();
+            });
+        }
+
+        protected override IBusRegistrationContext Registration => _container.GetInstance<IBusRegistrationContext>();
+    }
+
+
+    [TestFixture]
     public class StructureMap_Consumer_Endpoint :
         Common_Consumer_Endpoint
     {
@@ -61,5 +83,26 @@ namespace MassTransit.Containers.Tests.StructureMap_Tests
         }
 
         protected override IBusRegistrationContext Registration => _container.GetInstance<IBusRegistrationContext>();
+    }
+
+
+    [TestFixture]
+    public class StructureMap_Consumer_Connect :
+        Common_Consumer_Connect
+    {
+        readonly IContainer _container;
+
+        public StructureMap_Consumer_Connect()
+        {
+            _container = new Container(expression =>
+            {
+                expression.AddMassTransit(ConfigureRegistration);
+
+                expression.For<TaskCompletionSource<ConsumeContext<EasyMessage>>>()
+                    .Use(MessageCompletion);
+            });
+        }
+
+        protected override IReceiveEndpointConnector Connector => _container.GetInstance<IReceiveEndpointConnector>();
     }
 }

@@ -1,23 +1,22 @@
 namespace MassTransit.ActiveMqTransport.Transport
 {
-    using GreenPipes;
-    using GreenPipes.Agents;
+    using Transports;
 
 
     public class SessionContextSupervisor :
-        PipeContextSupervisor<SessionContext>,
+        TransportPipeContextSupervisor<SessionContext>,
         ISessionContextSupervisor
-
     {
         public SessionContextSupervisor(IConnectionContextSupervisor connectionContextSupervisor)
             : base(new SessionContextFactory(connectionContextSupervisor))
         {
+            connectionContextSupervisor.AddConsumeAgent(this);
         }
 
-        public void Probe(ProbeContext context)
+        public SessionContextSupervisor(ISessionContextSupervisor sessionContextSupervisor)
+            : base(new ScopeSessionContextFactory(sessionContextSupervisor))
         {
-            if (HasContext)
-                context.Add("connected", true);
+            sessionContextSupervisor.AddSendAgent(this);
         }
     }
 }

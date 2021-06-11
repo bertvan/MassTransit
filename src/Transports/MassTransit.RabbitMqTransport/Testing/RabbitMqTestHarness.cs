@@ -31,12 +31,13 @@
             set
             {
                 _hostAddress = value;
-                _inputQueueAddress = new Uri(HostAddress, InputQueueName);
+                _inputQueueAddress = new Uri($"queue:{InputQueueName}");
             }
         }
 
         public string Username { get; set; }
         public string Password { get; set; }
+        public bool CleanVirtualHost { get; set; } = true;
         public override string InputQueueName { get; }
         public string NodeHostName { get; set; }
         public IMessageNameFormatter NameFormatter { get; }
@@ -108,7 +109,8 @@
                 });
             });
 
-            CleanUpVirtualHost();
+            if (CleanVirtualHost)
+                CleanUpVirtualHost();
 
             return busControl;
         }
@@ -148,21 +150,24 @@
                 model.QueueDelete("input_queue_error");
 
                 model.ExchangeDelete("input_queue_delay");
-                model.QueueDelete("input_queue_delay");
 
-                model.ExchangeDelete(InputQueueName);
-                model.QueueDelete(InputQueueName);
+                if (InputQueueName != "input_queue")
+                {
+                    model.ExchangeDelete(InputQueueName);
+                    model.QueueDelete(InputQueueName);
 
-                model.ExchangeDelete(InputQueueName + "_skipped");
-                model.QueueDelete(InputQueueName + "_skipped");
+                    model.ExchangeDelete(InputQueueName + "_skipped");
+                    model.QueueDelete(InputQueueName + "_skipped");
 
-                model.ExchangeDelete(InputQueueName + "_error");
-                model.QueueDelete(InputQueueName + "_error");
+                    model.ExchangeDelete(InputQueueName + "_error");
+                    model.QueueDelete(InputQueueName + "_error");
 
-                model.ExchangeDelete(InputQueueName + "_delay");
-                model.QueueDelete(InputQueueName + "_delay");
+                    model.ExchangeDelete(InputQueueName + "_delay");
+                }
 
                 CleanupVirtualHost(model);
+
+                model.Close();
             }
             catch (Exception exception)
             {

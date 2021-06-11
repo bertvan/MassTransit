@@ -30,13 +30,10 @@
         where TInstance : class, SagaStateMachineInstance
     {
         readonly Dictionary<Event, EventCorrelation> _eventCorrelations;
-        readonly Lazy<EventRegistration[]> _registrations;
         Func<TInstance, Task<bool>> _isCompleted;
 
         protected MassTransitStateMachine()
         {
-            _registrations = new Lazy<EventRegistration[]>(GetRegistrations);
-
             _eventCorrelations = new Dictionary<Event, EventCorrelation>();
             _isCompleted = NotCompletedByDefault;
 
@@ -151,17 +148,53 @@
         {
             base.Event(propertyExpression);
 
-            if (typeof(T).HasInterface<CorrelatedBy<Guid>>())
-            {
-                var propertyInfo = propertyExpression.GetPropertyInfo();
+            var propertyInfo = propertyExpression.GetPropertyInfo();
 
-                var @event = (Event<T>)propertyInfo.GetValue(this);
+            var @event = (Event)propertyInfo.GetValue(this);
 
-                var builderType = typeof(CorrelatedByEventCorrelationBuilder<,>).MakeGenericType(typeof(TInstance), typeof(T));
-                var builder = (IEventCorrelationBuilder)Activator.CreateInstance(builderType, this, @event);
+            var registration = GetEventRegistration(@event, typeof(T));
 
-                _eventCorrelations[@event] = builder.Build();
-            }
+            registration.RegisterCorrelation(this);
+        }
+
+        /// <summary>
+        /// Declares an Event on the state machine with the specified data type, and allows the correlation of the event
+        /// to be configured.
+        /// </summary>
+        /// <typeparam name="T">The event data type</typeparam>
+        /// <param name="name">The event name (must be unique)</param>
+        protected override Event<T> Event<T>(string name)
+        {
+            Event<T> @event = base.Event<T>(name);
+
+            var registration = GetEventRegistration(@event, typeof(T));
+
+            registration.RegisterCorrelation(this);
+
+            return @event;
+        }
+
+        /// <summary>
+        /// Declares an Event on the state machine with the specified data type, and allows the correlation of the event
+        /// to be configured.
+        /// </summary>
+        /// <typeparam name="T">The event data type</typeparam>
+        /// <param name="name">The event name (must be unique)</param>
+        /// <param name="configure">Configuration callback method</param>
+        protected Event<T> Event<T>(string name, Action<IEventCorrelationConfigurator<TInstance, T>> configure)
+            where T : class
+        {
+            Event<T> @event = Event<T>(name);
+
+            _eventCorrelations.TryGetValue(@event, out var existingCorrelation);
+
+            var configurator = new MassTransitEventCorrelationConfigurator<TInstance, T>(this, @event, existingCorrelation);
+
+            configure?.Invoke(configurator);
+
+            _eventCorrelations[@event] = configurator.Build();
+
+            return @event;
         }
 
         /// <summary>
@@ -191,6 +224,28 @@
         /// Declares a request that is sent by the state machine to a service, and the associated response, fault, and
         /// timeout handling. The property is initialized with the fully built Request. The request must be declared before
         /// it is used in the state/event declaration statements.
+        /// Uses the Saga CorrelationId as the RequestId
+        /// </summary>
+        /// <typeparam name="TRequest">The request type</typeparam>
+        /// <typeparam name="TResponse">The response type</typeparam>
+        /// <param name="propertyExpression">The request property on the state machine</param>
+        /// <param name="configureRequest">Allow the request settings to be specified inline</param>
+        protected void Request<TRequest, TResponse>(Expression<Func<Request<TInstance, TRequest, TResponse>>> propertyExpression,
+            Action<IRequestConfigurator> configureRequest = default)
+            where TRequest : class
+            where TResponse : class
+        {
+            var configurator = new StateMachineRequestConfigurator<TRequest>();
+
+            configureRequest?.Invoke(configurator);
+
+            Request(propertyExpression, configurator.Settings);
+        }
+
+        /// <summary>
+        /// Declares a request that is sent by the state machine to a service, and the associated response, fault, and
+        /// timeout handling. The property is initialized with the fully built Request. The request must be declared before
+        /// it is used in the state/event declaration statements.
         /// </summary>
         /// <typeparam name="TRequest">The request type</typeparam>
         /// <typeparam name="TResponse">The response type</typeparam>
@@ -204,7 +259,7 @@
         {
             var property = propertyExpression.GetPropertyInfo();
 
-            var request = new StateMachineRequest<TInstance, TRequest, TResponse>(property.Name, requestIdExpression, settings);
+            var request = new StateMachineRequest<TInstance, TRequest, TResponse>(property.Name, settings, requestIdExpression);
 
             InitializeRequest(this, property, request);
 
@@ -219,10 +274,41 @@
                     .CancelRequestTimeout(request)
                     .ClearRequest(request),
                 When(request.Faulted)
-                    .CancelRequestTimeout(request)
-                    .ClearRequest(request),
-                When(request.TimeoutExpired, request.EventFilter)
-                    .ClearRequest(request));
+                    .CancelRequestTimeout(request));
+        }
+
+        /// <summary>
+        /// Declares a request that is sent by the state machine to a service, and the associated response, fault, and
+        /// timeout handling. The property is initialized with the fully built Request. The request must be declared before
+        /// it is used in the state/event declaration statements.
+        /// Uses the Saga CorrelationId as the RequestId
+        /// </summary>
+        /// <typeparam name="TRequest">The request type</typeparam>
+        /// <typeparam name="TResponse">The response type</typeparam>
+        /// <param name="propertyExpression">The request property on the state machine</param>
+        /// <param name="settings">The request settings (which can be read from configuration, etc.)</param>
+        protected void Request<TRequest, TResponse>(Expression<Func<Request<TInstance, TRequest, TResponse>>> propertyExpression,
+            RequestSettings settings)
+            where TRequest : class
+            where TResponse : class
+        {
+            var property = propertyExpression.GetPropertyInfo();
+
+            var request = new StateMachineRequest<TInstance, TRequest, TResponse>(property.Name, settings);
+
+            InitializeRequest(this, property, request);
+
+            Event(propertyExpression, x => x.Completed, x => x.CorrelateById(context => context.RequestId ?? throw new RequestException("Missing RequestId")));
+            Event(propertyExpression, x => x.Faulted, x => x.CorrelateById(context => context.RequestId ?? throw new RequestException("Missing RequestId")));
+            Event(propertyExpression, x => x.TimeoutExpired, x => x.CorrelateById(context => context.Message.RequestId));
+
+            State(propertyExpression, x => x.Pending);
+
+            DuringAny(
+                When(request.Completed)
+                    .CancelRequestTimeout(request),
+                When(request.Faulted)
+                    .CancelRequestTimeout(request));
         }
 
         /// <summary>
@@ -254,6 +340,30 @@
         /// Declares a request that is sent by the state machine to a service, and the associated response, fault, and
         /// timeout handling. The property is initialized with the fully built Request. The request must be declared before
         /// it is used in the state/event declaration statements.
+        /// Uses the Saga CorrelationId as the RequestId
+        /// </summary>
+        /// <typeparam name="TRequest">The request type</typeparam>
+        /// <typeparam name="TResponse">The response type</typeparam>
+        /// <typeparam name="TResponse2">The alternate response type</typeparam>
+        /// <param name="propertyExpression">The request property on the state machine</param>
+        /// <param name="configureRequest">Allow the request settings to be specified inline</param>
+        protected void Request<TRequest, TResponse, TResponse2>(Expression<Func<Request<TInstance, TRequest, TResponse, TResponse2>>> propertyExpression,
+            Action<IRequestConfigurator> configureRequest = default)
+            where TRequest : class
+            where TResponse : class
+            where TResponse2 : class
+        {
+            var configurator = new StateMachineRequestConfigurator<TRequest>();
+
+            configureRequest?.Invoke(configurator);
+
+            Request(propertyExpression, configurator.Settings);
+        }
+
+        /// <summary>
+        /// Declares a request that is sent by the state machine to a service, and the associated response, fault, and
+        /// timeout handling. The property is initialized with the fully built Request. The request must be declared before
+        /// it is used in the state/event declaration statements.
         /// </summary>
         /// <typeparam name="TRequest">The request type</typeparam>
         /// <typeparam name="TResponse">The response type</typeparam>
@@ -269,7 +379,7 @@
         {
             var property = propertyExpression.GetPropertyInfo();
 
-            var request = new StateMachineRequest<TInstance, TRequest, TResponse, TResponse2>(property.Name, requestIdExpression, settings);
+            var request = new StateMachineRequest<TInstance, TRequest, TResponse, TResponse2>(property.Name, settings, requestIdExpression);
 
             InitializeRequest(this, property, request);
 
@@ -288,10 +398,46 @@
                     .CancelRequestTimeout(request)
                     .ClearRequest(request),
                 When(request.Faulted)
-                    .CancelRequestTimeout(request)
-                    .ClearRequest(request),
-                When(request.TimeoutExpired, request.EventFilter)
-                    .ClearRequest(request));
+                    .CancelRequestTimeout(request));
+        }
+
+        /// <summary>
+        /// Declares a request that is sent by the state machine to a service, and the associated response, fault, and
+        /// timeout handling. The property is initialized with the fully built Request. The request must be declared before
+        /// it is used in the state/event declaration statements.
+        /// Uses the Saga CorrelationId as the RequestId
+        /// </summary>
+        /// <typeparam name="TRequest">The request type</typeparam>
+        /// <typeparam name="TResponse">The response type</typeparam>
+        /// <typeparam name="TResponse2">The alternate response type</typeparam>
+        /// <param name="propertyExpression">The request property on the state machine</param>
+        /// <param name="settings">The request settings (which can be read from configuration, etc.)</param>
+        protected void Request<TRequest, TResponse, TResponse2>(Expression<Func<Request<TInstance, TRequest, TResponse, TResponse2>>> propertyExpression,
+            RequestSettings settings)
+            where TRequest : class
+            where TResponse : class
+            where TResponse2 : class
+        {
+            var property = propertyExpression.GetPropertyInfo();
+
+            var request = new StateMachineRequest<TInstance, TRequest, TResponse, TResponse2>(property.Name, settings);
+
+            InitializeRequest(this, property, request);
+
+            Event(propertyExpression, x => x.Completed, x => x.CorrelateById(context => context.RequestId ?? throw new RequestException("Missing RequestId")));
+            Event(propertyExpression, x => x.Completed2, x => x.CorrelateById(context => context.RequestId ?? throw new RequestException("Missing RequestId")));
+            Event(propertyExpression, x => x.Faulted, x => x.CorrelateById(context => context.RequestId ?? throw new RequestException("Missing RequestId")));
+            Event(propertyExpression, x => x.TimeoutExpired, x => x.CorrelateById(context => context.Message.RequestId));
+
+            State(propertyExpression, x => x.Pending);
+
+            DuringAny(
+                When(request.Completed)
+                    .CancelRequestTimeout(request),
+                When(request.Completed2)
+                    .CancelRequestTimeout(request),
+                When(request.Faulted)
+                    .CancelRequestTimeout(request));
         }
 
         /// <summary>
@@ -409,14 +555,6 @@
         /// </summary>
         void RegisterImplicit()
         {
-            foreach (var registration in _registrations.Value)
-                registration.RegisterCorrelation(this);
-        }
-
-        EventRegistration[] GetRegistrations()
-        {
-            var events = new List<EventRegistration>();
-
             var machineType = GetType().GetTypeInfo();
 
             IEnumerable<PropertyInfo> properties = ConfigurationHelpers.GetStateMachineProperties(machineType);
@@ -430,22 +568,27 @@
                 if (!propertyType.ClosesType(typeof(Event<>), out Type[] arguments))
                     continue;
 
-                var messageType = arguments[0];
-                if (messageType.HasInterface<CorrelatedBy<Guid>>())
-                {
-                    var declarationType = typeof(CorrelatedEventRegistration<>).MakeGenericType(typeof(TInstance), messageType);
-                    var declaration = Activator.CreateInstance(declarationType, propertyInfo);
-                    events.Add((EventRegistration)declaration);
-                }
-                else
-                {
-                    var declarationType = typeof(UncorrelatedEventRegistration<>).MakeGenericType(typeof(TInstance), messageType);
-                    var declaration = Activator.CreateInstance(declarationType, propertyInfo);
-                    events.Add((EventRegistration)declaration);
-                }
-            }
+                var @event = (Event)propertyInfo.GetValue(this);
+                if (@event == null)
+                    continue;
 
-            return events.ToArray();
+                var registration = GetEventRegistration(@event, arguments[0]);
+                registration.RegisterCorrelation(this);
+            }
+        }
+
+        static EventRegistration GetEventRegistration(Event @event, Type messageType)
+        {
+            if (messageType.HasInterface<CorrelatedBy<Guid>>())
+            {
+                var registrationType = typeof(CorrelatedEventRegistration<>).MakeGenericType(typeof(TInstance), messageType);
+                return (EventRegistration)Activator.CreateInstance(registrationType, @event);
+            }
+            else
+            {
+                var registrationType = typeof(UncorrelatedEventRegistration<>).MakeGenericType(typeof(TInstance), messageType);
+                return (EventRegistration)Activator.CreateInstance(registrationType, @event);
+            }
         }
 
 
@@ -453,23 +596,19 @@
             EventRegistration
             where TData : class, CorrelatedBy<Guid>
         {
-            readonly PropertyInfo _propertyInfo;
+            readonly Event<TData> _event;
 
-            public CorrelatedEventRegistration(PropertyInfo propertyInfo)
+            public CorrelatedEventRegistration(Event<TData> @event)
             {
-                _propertyInfo = propertyInfo;
+                _event = @event;
             }
 
             public void RegisterCorrelation(MassTransitStateMachine<TInstance> machine)
             {
-                var @event = (Event<TData>)_propertyInfo.GetValue(machine);
-                if (@event == null)
-                    return;
-
                 var builderType = typeof(CorrelatedByEventCorrelationBuilder<,>).MakeGenericType(typeof(TInstance), typeof(TData));
-                var builder = (IEventCorrelationBuilder)Activator.CreateInstance(builderType, machine, @event);
+                var builder = (IEventCorrelationBuilder)Activator.CreateInstance(builderType, machine, _event);
 
-                machine._eventCorrelations[@event] = builder.Build();
+                machine._eventCorrelations[_event] = builder.Build();
             }
         }
 
@@ -478,33 +617,29 @@
             EventRegistration
             where TData : class
         {
-            readonly PropertyInfo _propertyInfo;
+            readonly Event<TData> _event;
 
-            public UncorrelatedEventRegistration(PropertyInfo propertyInfo)
+            public UncorrelatedEventRegistration(Event<TData> @event)
             {
-                _propertyInfo = propertyInfo;
+                _event = @event;
             }
 
             public void RegisterCorrelation(MassTransitStateMachine<TInstance> machine)
             {
-                var @event = (Event<TData>)_propertyInfo.GetValue(machine);
-                if (@event == null)
-                    return;
-
                 if (GlobalTopology.Send.GetMessageTopology<TData>().TryGetConvention(out ICorrelationIdMessageSendTopologyConvention<TData> convention)
-                    && convention.TryGetMessageCorrelationId(out var messageCorrelationId))
+                    && convention.TryGetMessageCorrelationId(out IMessageCorrelationId<TData> messageCorrelationId))
                 {
                     var builderType = typeof(MessageCorrelationIdEventCorrelationBuilder<,>).MakeGenericType(typeof(TInstance), typeof(TData));
-                    var builder = (IEventCorrelationBuilder)Activator.CreateInstance(builderType, machine, @event, messageCorrelationId);
+                    var builder = (IEventCorrelationBuilder)Activator.CreateInstance(builderType, machine, _event, messageCorrelationId);
 
-                    machine._eventCorrelations[@event] = builder.Build();
+                    machine._eventCorrelations[_event] = builder.Build();
                 }
                 else
                 {
                     var correlationType = typeof(UncorrelatedEventCorrelation<,>).MakeGenericType(typeof(TInstance), typeof(TData));
-                    var correlation = (EventCorrelation<TInstance, TData>)Activator.CreateInstance(correlationType, @event);
+                    var correlation = (EventCorrelation<TInstance, TData>)Activator.CreateInstance(correlationType, _event);
 
-                    machine._eventCorrelations[@event] = correlation;
+                    machine._eventCorrelations[_event] = correlation;
                 }
             }
         }

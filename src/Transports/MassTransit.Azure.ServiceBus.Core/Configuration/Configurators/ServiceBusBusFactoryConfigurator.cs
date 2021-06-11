@@ -1,10 +1,9 @@
 ﻿namespace MassTransit.Azure.ServiceBus.Core.Configurators
 {
     using System;
-    using System.Diagnostics;
     using BusConfigurators;
     using Configuration;
-    using MassTransit.Builders;
+    using MassTransit.Configuration;
     using Settings;
     using Topology;
     using Topology.Configurators;
@@ -30,28 +29,12 @@
 
             _queueConfigurator = new QueueConfigurator(queueName) {AutoDeleteOnIdle = Defaults.TemporaryAutoDeleteOnIdle};
 
-            _settings = new ReceiveEndpointSettings(queueName, _queueConfigurator);
+            _settings = new ReceiveEndpointSettings(_busConfiguration.BusEndpointConfiguration, queueName, _queueConfigurator);
         }
 
-        public IBusControl CreateBus()
+        public IReceiveEndpointConfiguration CreateBusEndpointConfiguration(Action<IReceiveEndpointConfigurator> configure)
         {
-            void ConfigureBusEndpoint(IServiceBusReceiveEndpointConfigurator configurator)
-            {
-                configurator.ConfigureConsumeTopology = false;
-            }
-
-            if (Activity.DefaultIdFormat != ActivityIdFormat.Hierarchical)
-            {
-                Activity.DefaultIdFormat = ActivityIdFormat.Hierarchical;
-                Activity.ForceDefaultIdFormat = true;
-            }
-
-            var busReceiveEndpointConfiguration = _busConfiguration.HostConfiguration
-                .CreateReceiveEndpointConfiguration(_settings, _busConfiguration.BusEndpointConfiguration, ConfigureBusEndpoint);
-
-            var builder = new ConfigurationBusBuilder(_busConfiguration, busReceiveEndpointConfiguration);
-
-            return builder.Build();
+            return _busConfiguration.HostConfiguration.CreateReceiveEndpointConfiguration(_settings, _busConfiguration.BusEndpointConfiguration, configure);
         }
 
         public TimeSpan DuplicateDetectionHistoryTimeWindow
@@ -76,12 +59,7 @@
 
         public int MaxConcurrentCalls
         {
-            set => _settings.MaxConcurrentCalls = value;
-        }
-
-        public int PrefetchCount
-        {
-            set => _settings.PrefetchCount = value;
+            set => ConcurrentMessageLimit = value;
         }
 
         public void OverrideDefaultBusEndpointQueueName(string value)

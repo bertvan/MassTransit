@@ -1,14 +1,16 @@
-namespace MassTransit.Azure.Storage
+using BlobServiceClient = Azure.Storage.Blobs.BlobServiceClient;
+
+
+namespace MassTransit
 {
-    using MessageData;
-    using Microsoft.Azure.Storage;
+    using Azure.Storage.MessageData;
 
 
     public static class AzureStorageConfigurationExtensions
     {
-        public static AzureStorageMessageDataRepository CreateMessageDataRepository(this CloudStorageAccount account, string containerName)
+        public static AzureStorageMessageDataRepository CreateMessageDataRepository(this BlobServiceClient client, string containerName)
         {
-            return new AzureStorageMessageDataRepository(account.BlobEndpoint, containerName, account.Credentials, new NewIdBlobNameGenerator());
+            return new AzureStorageMessageDataRepository(client, containerName);
         }
     }
 }

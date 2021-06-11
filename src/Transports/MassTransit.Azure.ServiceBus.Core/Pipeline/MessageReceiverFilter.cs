@@ -2,9 +2,9 @@ namespace MassTransit.Azure.ServiceBus.Core.Pipeline
 {
     using System.Threading.Tasks;
     using Context;
+    using Contexts;
     using Events;
     using GreenPipes;
-    using GreenPipes.Agents;
     using Transport;
 
 
@@ -12,16 +12,17 @@ namespace MassTransit.Azure.ServiceBus.Core.Pipeline
     /// Creates a message receiver and receives messages from the input queue of the endpoint
     /// </summary>
     public class MessageReceiverFilter :
-        Supervisor,
         IFilter<ClientContext>
     {
+        readonly ServiceBusReceiveEndpointContext _context;
         readonly IBrokeredMessageReceiver _messageReceiver;
         readonly IReceiveTransportObserver _transportObserver;
 
-        public MessageReceiverFilter(IBrokeredMessageReceiver messageReceiver, IReceiveTransportObserver transportObserver)
+        public MessageReceiverFilter(IBrokeredMessageReceiver messageReceiver, ServiceBusReceiveEndpointContext context)
         {
             _messageReceiver = messageReceiver;
-            _transportObserver = transportObserver;
+            _transportObserver = context.TransportObservers;
+            _context = context;
         }
 
         void IProbeSite.Probe(ProbeContext context)
@@ -32,7 +33,8 @@ namespace MassTransit.Azure.ServiceBus.Core.Pipeline
 
         async Task IFilter<ClientContext>.Send(ClientContext context, IPipe<ClientContext> next)
         {
-            LogContext.Debug?.Log("Creating message receiver for {InputAddress}", context.InputAddress);
+            if (context.IsClosedOrClosing)
+                return;
 
             var receiver = CreateMessageReceiver(context, _messageReceiver);
 
@@ -40,7 +42,7 @@ namespace MassTransit.Azure.ServiceBus.Core.Pipeline
 
             await receiver.Ready.ConfigureAwait(false);
 
-            Add(receiver);
+            _context.AddConsumeAgent(receiver);
 
             await _transportObserver.Ready(new ReceiveTransportReadyEvent(context.InputAddress)).ConfigureAwait(false);
 

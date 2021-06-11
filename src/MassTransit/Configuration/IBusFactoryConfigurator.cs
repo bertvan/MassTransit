@@ -19,7 +19,11 @@ namespace MassTransit
         IConsumePipeConfigurator,
         ISendPipelineConfigurator,
         IPublishPipelineConfigurator,
-        IBusObserverConnector
+        IBusObserverConnector,
+        IReceiveObserverConnector,
+        IConsumeObserverConnector,
+        ISendObserverConnector,
+        IPublishObserverConnector
     {
         IMessageTopologyConfigurator MessageTopology { get; }
         IConsumeTopologyConfigurator ConsumeTopology { get; }
@@ -30,6 +34,17 @@ namespace MassTransit
         /// Set to true if the topology should be deployed only
         /// </summary>
         bool DeployTopologyOnly { set; }
+
+        /// <summary>
+        /// Specify the number of messages to prefetch from the message broker
+        /// </summary>
+        /// <value>The limit</value>
+        int PrefetchCount { set; }
+
+        /// <summary>
+        /// Specify the number of concurrent messages that can be consumed (separate from prefetch count)
+        /// </summary>
+        int? ConcurrentMessageLimit { set; }
 
         /// <summary>
         /// Configure the message topology for the message type (global across all bus instances of the same transport type)

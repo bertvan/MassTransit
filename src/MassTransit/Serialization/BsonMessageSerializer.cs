@@ -4,7 +4,6 @@
     using System.Globalization;
     using System.IO;
     using System.Net.Mime;
-    using Configuration;
     using JsonConverters;
     using Metadata;
     using Newtonsoft.Json;
@@ -22,7 +21,6 @@
         static readonly Lazy<JsonSerializer> _deserializer;
         static readonly Lazy<JsonSerializer> _serializer;
 
-        public static readonly ListJsonConverter ListJsonConverter;
         public static readonly CaseInsensitiveDictionaryJsonConverter CaseInsensitiveDictionaryJsonConverter;
         public static readonly InterfaceProxyConverter InterfaceProxyConverter;
         public static readonly MessageDataJsonConverter MessageDataJsonConverter;
@@ -33,7 +31,6 @@
 
         static BsonMessageSerializer()
         {
-            ListJsonConverter = new ListJsonConverter();
             CaseInsensitiveDictionaryJsonConverter = new CaseInsensitiveDictionaryJsonConverter();
             InterfaceProxyConverter = new InterfaceProxyConverter();
             MessageDataJsonConverter = new MessageDataJsonConverter();
@@ -41,24 +38,11 @@
 
             var namingStrategy = new CamelCaseNamingStrategy();
 
-            DefaultContractResolver deserializerContractResolver;
-            if (AppContext.TryGetSwitch(AppContextSwitches.CaseSensitiveDictionaryDeserializer, out var isEnabled) && isEnabled)
-            {
-                deserializerContractResolver = new JsonContractResolver(
-                    ListJsonConverter,
-                    InterfaceProxyConverter,
-                    IsoDateTimeConverter,
-                    MessageDataJsonConverter) {NamingStrategy = namingStrategy};
-            }
-            else
-            {
-                deserializerContractResolver = new JsonContractResolver(
-                    ListJsonConverter,
-                    CaseInsensitiveDictionaryJsonConverter,
-                    InterfaceProxyConverter,
-                    IsoDateTimeConverter,
-                    MessageDataJsonConverter) {NamingStrategy = namingStrategy};
-            }
+            DefaultContractResolver deserializerContractResolver = new JsonContractResolver(
+                CaseInsensitiveDictionaryJsonConverter,
+                InterfaceProxyConverter,
+                IsoDateTimeConverter,
+                MessageDataJsonConverter) {NamingStrategy = namingStrategy};
 
             IContractResolver serializerContractResolver =
                 new JsonContractResolver(IsoDateTimeConverter, MessageDataJsonConverter) {NamingStrategy = namingStrategy};

@@ -26,6 +26,29 @@ namespace MassTransit
         /// </summary>
         bool ConfigureConsumeTopology { set; }
 
+        /// <summary>
+        /// If true (the default), faults should be published when no ResponseAddress or FaultAddress are present.
+        /// </summary>
+        bool PublishFaults { set; }
+
+        /// <summary>
+        /// Specify the number of messages to prefetch from the message broker
+        /// </summary>
+        /// <value>The limit</value>
+        int PrefetchCount { get; set; }
+
+        /// <summary>
+        /// Specify the number of concurrent messages that can be consumed (separate from prefetch count)
+        /// </summary>
+        int? ConcurrentMessageLimit { get; set; }
+
+        /// <summary>
+        /// Configures whether the broker topology is configured for the specified message type. Related to
+        /// <see cref="ConfigureConsumeTopology"/>, but for an individual message type.
+        /// </summary>
+        void ConfigureMessageTopology<T>(bool enabled = true)
+            where T : class;
+
         [EditorBrowsable(EditorBrowsableState.Never)]
         void AddEndpointSpecification(IReceiveEndpointSpecification configurator);
 

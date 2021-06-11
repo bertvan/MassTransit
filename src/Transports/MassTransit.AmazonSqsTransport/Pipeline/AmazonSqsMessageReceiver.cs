@@ -20,7 +20,7 @@ namespace MassTransit.AmazonSqsTransport.Pipeline
     /// Receives messages from AmazonSQS, pushing them to the InboundPipe of the service endpoint.
     /// </summary>
     public sealed class AmazonSqsMessageReceiver :
-        Supervisor,
+        Agent,
         DeliveryMetrics
     {
         readonly ClientContext _client;
@@ -46,7 +46,8 @@ namespace MassTransit.AmazonSqsTransport.Pipeline
             _dispatcher = context.CreateReceivePipeDispatcher();
             _dispatcher.ZeroActivity += HandleDeliveryComplete;
 
-            Task.Run(Consume);
+            var task = Task.Run(Consume);
+            SetCompleted(task);
         }
 
         long DeliveryMetrics.DeliveryCount => _dispatcher.DispatchCount;
@@ -54,8 +55,7 @@ namespace MassTransit.AmazonSqsTransport.Pipeline
 
         async Task Consume()
         {
-            // TODO add ConcurrencyLimit for receive settings
-            var executor = new ChannelExecutor(_receiveSettings.PrefetchCount, _receiveSettings.PrefetchCount);
+            var executor = new ChannelExecutor(_receiveSettings.PrefetchCount, _receiveSettings.ConcurrentMessageLimit);
 
             SetReady();
 
@@ -69,16 +69,15 @@ namespace MassTransit.AmazonSqsTransport.Pipeline
             catch (Exception exception)
             {
                 LogContext.Error?.Log(exception, "Consume Loop faulted");
+                throw;
             }
             finally
             {
                 await executor.DisposeAsync().ConfigureAwait(false);
             }
-
-            SetCompleted(TaskUtil.Completed);
         }
 
-        protected override async Task StopSupervisor(StopSupervisorContext context)
+        protected override async Task StopAgent(StopContext context)
         {
             LogContext.Debug?.Log("Stopping consumer: {InputAddress}", _context.InputAddress);
 
@@ -113,10 +112,11 @@ namespace MassTransit.AmazonSqsTransport.Pipeline
         {
             var maxReceiveCount = (_receiveSettings.PrefetchCount + 9) / 10;
             var receiveCount = 1;
+            var messageLimit = Math.Min(_receiveSettings.PrefetchCount, 10);
 
             while (!IsStopping)
             {
-                Task<int>[] receiveTasks = Enumerable.Repeat(0, receiveCount).Select(_ => ReceiveMessages(10, executor)).ToArray();
+                Task<int>[] receiveTasks = Enumerable.Repeat(0, receiveCount).Select(_ => ReceiveMessages(messageLimit, executor)).ToArray();
 
                 int[] counts = await Task.WhenAll(receiveTasks).ConfigureAwait(false);
 
@@ -131,30 +131,33 @@ namespace MassTransit.AmazonSqsTransport.Pipeline
 
         async Task<int> ReceiveMessages(int messageLimit, ChannelExecutor executor)
         {
-            IList<Message> messages = await _client.ReceiveMessages(_receiveSettings.EntityName, messageLimit, _receiveSettings.WaitTimeSeconds, Stopping)
-                .ConfigureAwait(false);
+            try
+            {
+                IList<Message> messages = await _client.ReceiveMessages(_receiveSettings.EntityName, messageLimit, _receiveSettings.WaitTimeSeconds, Stopping)
+                    .ConfigureAwait(false);
 
-            await Task.WhenAll(messages.Select(message => executor.Push(() => HandleMessage(message), Stopping))).ConfigureAwait(false);
+                await Task.WhenAll(messages.Select(message => executor.Run(() => HandleMessage(message), Stopping))).ConfigureAwait(false);
 
-            return messages.Count;
+                return messages.Count;
+            }
+            catch (OperationCanceledException)
+            {
+                return 0;
+            }
         }
 
         Task HandleDeliveryComplete()
         {
             if (IsStopping)
             {
-                LogContext.Debug?.Log("Consumer shutdown completed: {InputAddress}", _context.InputAddress);
-
                 _deliveryComplete.TrySetResult(true);
             }
 
             return TaskUtil.Completed;
         }
 
-        async Task ActiveAndActualAgentsCompleted(StopSupervisorContext context)
+        async Task ActiveAndActualAgentsCompleted(StopContext context)
         {
-            await Task.WhenAll(context.Agents.Select(x => Completed)).OrCanceled(context.CancellationToken).ConfigureAwait(false);
-
             if (_dispatcher.ActiveDispatchCount > 0)
             {
                 try

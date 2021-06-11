@@ -17,14 +17,13 @@
             [Test]
             public async Task Should_cancel_when_the_order_is_submitted()
             {
-                Task<ConsumeContext<CartRemoved>> handler = ConnectPublishHandler<CartRemoved>();
+                Task<ConsumeContext<CartRemoved>> handler = await ConnectPublishHandler<CartRemoved>();
 
                 var memberNumber = NewId.NextGuid().ToString();
 
                 await InputQueueSendEndpoint.Send<CartItemAdded>(new {MemberNumber = memberNumber});
 
-                Guid? saga = await _repository.ShouldContainSaga(x => x.MemberNumber == memberNumber
-                    && GetCurrentState(x) == _machine.Active, TestTimeout);
+                Guid? saga = await _repository.ShouldContainSagaInState(x => x.MemberNumber == memberNumber, _machine, _machine.Active, TestTimeout);
 
                 Assert.IsTrue(saga.HasValue);
 
@@ -38,7 +37,7 @@
             [Test]
             public async Task Should_receive_the_timeout()
             {
-                Task<ConsumeContext<CartRemoved>> handler = ConnectPublishHandler<CartRemoved>();
+                Task<ConsumeContext<CartRemoved>> handler = await ConnectPublishHandler<CartRemoved>();
 
                 var memberNumber = NewId.NextGuid().ToString();
 
@@ -50,14 +49,13 @@
             [Test]
             public async Task Should_reschedule_the_timeout_when_items_are_added()
             {
-                Task<ConsumeContext<CartRemoved>> handler = ConnectPublishHandler<CartRemoved>();
+                Task<ConsumeContext<CartRemoved>> handler = await ConnectPublishHandler<CartRemoved>();
 
                 var memberNumber = NewId.NextGuid().ToString();
 
                 await InputQueueSendEndpoint.Send<CartItemAdded>(new {MemberNumber = memberNumber});
 
-                Guid? saga = await _repository.ShouldContainSaga(x => x.MemberNumber == memberNumber
-                    && GetCurrentState(x) == _machine.Active, TestTimeout);
+                Guid? saga = await _repository.ShouldContainSagaInState(x => x.MemberNumber == memberNumber, _machine, _machine.Active, TestTimeout);
 
                 Assert.IsTrue(saga.HasValue);
 
@@ -68,11 +66,6 @@
 
             InMemorySagaRepository<TestState> _repository;
             TestStateMachine _machine;
-
-            State GetCurrentState(TestState state)
-            {
-                return _machine.GetState(state).Result;
-            }
 
             protected override void ConfigureInMemoryReceiveEndpoint(IInMemoryReceiveEndpointConfigurator configurator)
             {

@@ -16,12 +16,13 @@ namespace MassTransit.TestFramework
         AsyncTestFixture
     {
         static int _subscribedObserver;
-        static readonly bool _enableDiagnostics = !bool.TryParse(Environment.GetEnvironmentVariable("CI"), out var isBuildServer) || !isBuildServer;
-        protected static readonly TestOutputLoggerFactory LoggerFactory;
+        static readonly bool _enableLog = !bool.TryParse(Environment.GetEnvironmentVariable("CI"), out var isBuildServer) || !isBuildServer;
+        static readonly bool _enableDiagnostics = bool.TryParse(Environment.GetEnvironmentVariable("DIAG"), out var enable) && enable;
+        public static readonly TestOutputLoggerFactory LoggerFactory;
 
         static BusTestFixture()
         {
-            LoggerFactory = new TestOutputLoggerFactory(true);
+            LoggerFactory = new TestOutputLoggerFactory(_enableLog);
         }
 
         protected BusTestFixture(BusTestHarness harness)
@@ -38,9 +39,14 @@ namespace MassTransit.TestFramework
         protected IBus Bus => BusTestHarness.Bus;
         protected IBusControl BusControl => BusTestHarness.BusControl;
 
+        public static bool IsLogEnabled => _enableLog;
+
         public static void ConfigureBusDiagnostics(IBusFactoryConfigurator configurator)
         {
-            LogContext.ConfigureCurrentLogContext(LoggerFactory);
+            if (_enableLog)
+                LogContext.ConfigureCurrentLogContext(LoggerFactory);
+
+            LoggerFactory.Current = default;
 
             if (_enableDiagnostics)
             {
@@ -74,26 +80,30 @@ namespace MassTransit.TestFramework
             return BusTestHarness.SubscribeHandler(filter);
         }
 
-        protected Task<ConsumeContext<T>> ConnectPublishHandler<T>()
+        protected async Task<Task<ConsumeContext<T>>> ConnectPublishHandler<T>()
             where T : class
         {
             Task<ConsumeContext<T>> result = null;
-            Bus.ConnectReceiveEndpoint(NewId.NextGuid().ToString(), context =>
+            var handle = Bus.ConnectReceiveEndpoint(context =>
             {
                 result = Handled<T>(context);
             });
 
+            await handle.Ready;
+
             return result;
         }
 
-        protected Task<ConsumeContext<T>> ConnectPublishHandler<T>(Func<ConsumeContext<T>, bool> filter)
+        protected async Task<Task<ConsumeContext<T>>> ConnectPublishHandler<T>(Func<ConsumeContext<T>, bool> filter)
             where T : class
         {
             Task<ConsumeContext<T>> result = null;
-            Bus.ConnectReceiveEndpoint(NewId.NextGuid().ToString(), context =>
+            var handle = Bus.ConnectReceiveEndpoint(context =>
             {
                 result = Handled(context, filter);
             });
+
+            await handle.Ready;
 
             return result;
         }

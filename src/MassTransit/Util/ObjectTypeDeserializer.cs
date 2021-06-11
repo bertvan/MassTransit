@@ -2,9 +2,9 @@
 {
     using System;
     using System.Collections.Generic;
-    using System.IO;
     using Context;
     using Courier;
+    using Initializers.PropertyProviders;
     using Metadata;
     using Newtonsoft.Json;
     using Newtonsoft.Json.Linq;
@@ -58,11 +58,17 @@
 
         public T Deserialize<T>(object value)
         {
+            if (value is T val)
+                return val;
+
             return (T)Deserialize(value, typeof(T), false);
         }
 
         T IObjectTypeDeserializer.Deserialize<T>(object value, T defaultValue)
         {
+            if (value is T val)
+                return val;
+
             var result = Deserialize(value, typeof(T), true);
             if (result == null)
                 return defaultValue;
@@ -77,9 +83,7 @@
                 return null;
 
             if (token.Type == JTokenType.String && objectType.IsInterface && TypeMetadataCache.IsValidMessageType(objectType))
-            {
                 return JsonConvert.DeserializeObject((string)value, objectType, JsonMessageSerializer.DeserializerSettings);
-            }
 
             using var jsonReader = new JTokenReader(token);
 

@@ -5,7 +5,7 @@
     using BusConfigurators;
     using Configuration;
     using GreenPipes;
-    using MassTransit.Builders;
+    using MassTransit.Configuration;
     using Topology;
     using Topology.Settings;
 
@@ -26,12 +26,7 @@
             _hostConfiguration = busConfiguration.HostConfiguration;
 
             var queueName = _busConfiguration.Topology.Consume.CreateTemporaryQueueName("bus");
-            _settings = new QueueReceiveSettings(queueName, false, true);
-        }
-
-        public ushort PrefetchCount
-        {
-            set => _settings.PrefetchCount = value;
+            _settings = new QueueReceiveSettings(busConfiguration.BusEndpointConfiguration, queueName, false, true);
         }
 
         public ushort WaitTimeSeconds
@@ -107,19 +102,9 @@
             _hostConfiguration.ReceiveEndpoint(queueName, configureEndpoint);
         }
 
-        public IBusControl CreateBus()
+        public IReceiveEndpointConfiguration CreateBusEndpointConfiguration(Action<IReceiveEndpointConfigurator> configure)
         {
-            void ConfigureBusEndpoint(IAmazonSqsReceiveEndpointConfigurator configurator)
-            {
-                configurator.ConfigureConsumeTopology = false;
-            }
-
-            var busReceiveEndpointConfiguration = _busConfiguration.HostConfiguration
-                .CreateReceiveEndpointConfiguration(_settings, _busConfiguration.BusEndpointConfiguration, ConfigureBusEndpoint);
-
-            var builder = new ConfigurationBusBuilder(_busConfiguration, busReceiveEndpointConfiguration);
-
-            return builder.Build();
+            return _busConfiguration.HostConfiguration.CreateReceiveEndpointConfiguration(_settings, _busConfiguration.BusEndpointConfiguration, configure);
         }
 
         public override IEnumerable<ValidationResult> Validate()

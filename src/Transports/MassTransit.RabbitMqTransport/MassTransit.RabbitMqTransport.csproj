@@ -13,11 +13,15 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="RabbitMQ.Client" Version="6.1.0" />
+    <PackageReference Include="RabbitMQ.Client" Version="6.2.1" />
     <PackageReference Include="Microsoft.SourceLink.GitHub" Version="1.0.0" PrivateAssets="All" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\MassTransit\MassTransit.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Configuration\Specifications" />
   </ItemGroup>
 </Project>

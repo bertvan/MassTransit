@@ -24,6 +24,11 @@ namespace MassTransit.Azure.ServiceBus.Core
         string EntityPath { get; }
 
         /// <summary>
+        /// True if the client or connection is closed or closing
+        /// </summary>
+        bool IsClosedOrClosing { get; }
+
+        /// <summary>
         /// Register an message handler for the client
         /// </summary>
         /// <param name="callback"></param>
@@ -38,9 +43,23 @@ namespace MassTransit.Azure.ServiceBus.Core
         void OnSessionAsync(Func<IMessageSession, Message, CancellationToken, Task> callback, Func<ExceptionReceivedEventArgs, Task> exceptionHandler);
 
         /// <summary>
+        /// Shutdown the message/session receivers
+        /// </summary>
+        /// <returns></returns>
+        Task ShutdownAsync();
+
+        /// <summary>
         /// Close down the message handler on the received
         /// </summary>
         /// <returns></returns>
         Task CloseAsync();
+
+        /// <summary>
+        /// Notify that an exception has occurred on the client which is not transient and requires a recycle
+        /// </summary>
+        /// <param name="exception"></param>
+        /// <param name="entityPath"></param>
+        /// <returns></returns>
+        Task NotifyFaulted(Exception exception, string entityPath);
     }
 }

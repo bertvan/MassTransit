@@ -2,10 +2,10 @@ namespace MassTransit
 {
     using System;
     using Automatonymous;
-    using Conductor;
     using ConsumeConfigurators;
     using Courier;
     using Definition;
+    using Futures;
     using Registration;
     using Saga;
 
@@ -193,10 +193,22 @@ namespace MassTransit
             where T : class;
 
         /// <summary>
-        /// Adds the service client, which enables service discovery via Conductor
+        /// Add a request client, for the request type, which uses the <see cref="ConsumeContext" /> if present, otherwise
+        /// uses the <see cref="IBus" />. The request is published, unless an endpoint convention is specified for the
+        /// request type.
         /// </summary>
-        /// <param name="configure">Configure the service client</param>
-        void AddServiceClient(Action<IServiceClientConfigurator> configure = default);
+        /// <param name="requestType">The request message type</param>
+        /// <param name="timeout">The request timeout</param>
+        void AddRequestClient(Type requestType, RequestTimeout timeout = default);
+
+        /// <summary>
+        /// Add a request client, for the request type, which uses the <see cref="ConsumeContext" /> if present, otherwise
+        /// uses the <see cref="IBus" />.
+        /// </summary>
+        /// <param name="requestType">The request message type</param>
+        /// <param name="destinationAddress">The destination address for the request</param>
+        /// <param name="timeout">The request timeout</param>
+        void AddRequestClient(Type requestType, Uri destinationAddress, RequestTimeout timeout = default);
 
         /// <summary>
         /// Set the default endpoint name formatter used for endpoint names
@@ -209,5 +221,43 @@ namespace MassTransit
         /// </summary>
         /// <param name="registration"></param>
         void AddMessageScheduler(IMessageSchedulerRegistration registration);
+
+        /// <summary>
+        /// Add a saga repository for the specified saga type, by specifying the repository type via method chaining. Using this
+        /// method alone does nothing, it should be followed with the appropriate repository configuration method.
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <returns></returns>
+        ISagaRegistrationConfigurator<T> AddSagaRepository<T>()
+            where T : class, ISaga;
+
+        /// <summary>
+        /// Specify a saga repository provider, that will be called when a saga is configured by type
+        /// (without a specific generic call to AddSaga/AddSagaStateMachine)
+        /// </summary>
+        /// <param name="provider"></param>
+        void SetSagaRepositoryProvider(ISagaRepositoryRegistrationProvider provider);
+
+        /// <summary>
+        /// Adds a future registration, along with an optional definition
+        /// </summary>
+        /// <param name="futureDefinitionType">The future definition type</param>
+        /// <typeparam name="TFuture"></typeparam>
+        IFutureRegistrationConfigurator<TFuture> AddFuture<TFuture>(Type futureDefinitionType = null)
+            where TFuture : MassTransitStateMachine<FutureState>;
+
+        /// <summary>
+        /// Adds a future registration, along with an optional definition
+        /// </summary>
+        /// <param name="futureType"></param>
+        /// <param name="futureDefinitionType">The future definition type</param>
+        void AddFuture(Type futureType, Type futureDefinitionType = null);
+
+        /// <summary>
+        /// Adds a method that is called for each receive endpoint when it is configured, allowing additional
+        /// configuration to be specified.
+        /// </summary>
+        /// <param name="callback">Callback invoked for each receive endpoint</param>
+        void AddConfigureEndpointsCallback(ConfigureEndpointsCallback callback);
     }
 }

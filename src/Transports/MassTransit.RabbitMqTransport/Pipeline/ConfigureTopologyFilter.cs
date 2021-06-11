@@ -1,7 +1,9 @@
 namespace MassTransit.RabbitMqTransport.Pipeline
 {
+    using System;
     using System.Linq;
     using System.Threading.Tasks;
+    using Context;
     using GreenPipes;
     using Topology.Builders;
     using Topology.Entities;
@@ -45,41 +47,58 @@ namespace MassTransit.RabbitMqTransport.Pipeline
 
         async Task ConfigureTopology(ModelContext context)
         {
-            await Task.WhenAll(_brokerTopology.Exchanges.Select(exchange => Declare(context, exchange))).ConfigureAwait(false);
-
-            await Task.WhenAll(_brokerTopology.ExchangeBindings.Select(binding => Bind(context, binding))).ConfigureAwait(false);
-
             await Task.WhenAll(_brokerTopology.Queues.Select(queue => Declare(context, queue))).ConfigureAwait(false);
 
+            await Task.WhenAll(_brokerTopology.Exchanges.Select(exchange => Declare(context, exchange))).ConfigureAwait(false);
+
             await Task.WhenAll(_brokerTopology.QueueBindings.Select(binding => Bind(context, binding))).ConfigureAwait(false);
+
+            await Task.WhenAll(_brokerTopology.ExchangeBindings.Select(binding => Bind(context, binding))).ConfigureAwait(false);
         }
 
-        Task Declare(ModelContext context, Exchange exchange)
+        static Task Declare(ModelContext context, Exchange exchange)
         {
             RabbitMqLogMessages.DeclareExchange(exchange);
 
             return context.ExchangeDeclare(exchange.ExchangeName, exchange.ExchangeType, exchange.Durable, exchange.AutoDelete, exchange.ExchangeArguments);
         }
 
-        Task Declare(ModelContext context, Queue queue)
+        static async Task Declare(ModelContext context, Queue queue)
         {
-            RabbitMqLogMessages.DeclareQueue(queue);
+            try
+            {
+                var ok = await context.QueueDeclare(queue.QueueName, queue.Durable, queue.Exclusive, queue.AutoDelete, queue.QueueArguments)
+                    .ConfigureAwait(false);
 
-            return context.QueueDeclare(queue.QueueName, queue.Durable, queue.Exclusive, queue.AutoDelete, queue.QueueArguments);
+                RabbitMqLogMessages.DeclareQueue(queue, ok.ConsumerCount, ok.MessageCount);
+
+                await Task.Delay(10).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                LogContext.Error?.Log(exception, "Declare queue faulted: {Queue}", queue);
+
+                throw;
+            }
         }
 
-        Task Bind(ModelContext context, ExchangeToExchangeBinding binding)
+        static async Task Bind(ModelContext context, ExchangeToExchangeBinding binding)
         {
             RabbitMqLogMessages.BindToExchange(binding);
 
-            return context.ExchangeBind(binding.Destination.ExchangeName, binding.Source.ExchangeName, binding.RoutingKey, binding.Arguments);
+            await context.ExchangeBind(binding.Destination.ExchangeName, binding.Source.ExchangeName, binding.RoutingKey, binding.Arguments)
+                .ConfigureAwait(false);
+
+            await Task.Delay(10).ConfigureAwait(false);
         }
 
-        Task Bind(ModelContext context, ExchangeToQueueBinding binding)
+        static async Task Bind(ModelContext context, ExchangeToQueueBinding binding)
         {
             RabbitMqLogMessages.BindToQueue(binding);
 
-            return context.QueueBind(binding.Destination.QueueName, binding.Source.ExchangeName, binding.RoutingKey, binding.Arguments);
+            await context.QueueBind(binding.Destination.QueueName, binding.Source.ExchangeName, binding.RoutingKey, binding.Arguments).ConfigureAwait(false);
+
+            await Task.Delay(10).ConfigureAwait(false);
         }
 
 

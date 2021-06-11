@@ -25,18 +25,7 @@
             Receive = new ReceivePipeConfiguration();
 
             Serialization = new SerializationConfiguration();
-        }
-
-        protected EndpointConfiguration(IBusConfiguration busConfiguration, ITopologyConfiguration topology)
-        {
-            Topology = topology;
-
-            Consume = new ConsumePipeConfiguration(busConfiguration.Consume.Specification);
-            Send = new SendPipeConfiguration(busConfiguration.Send.Specification);
-            Publish = new PublishPipeConfiguration(busConfiguration.Publish.Specification);
-            Receive = new ReceivePipeConfiguration();
-
-            Serialization = busConfiguration.Serialization.CreateSerializationConfiguration();
+            Transport = new TransportConfiguration();
         }
 
         protected EndpointConfiguration(IEndpointConfiguration parentConfiguration, ITopologyConfiguration topology)
@@ -49,6 +38,8 @@
             Receive = new ReceivePipeConfiguration();
 
             Serialization = parentConfiguration.Serialization.CreateSerializationConfiguration();
+
+            Transport = new TransportConfiguration(parentConfiguration.Transport);
         }
 
         protected EndpointConfiguration(IEndpointConfiguration endpointConfiguration)
@@ -61,6 +52,20 @@
             Receive = endpointConfiguration.Receive;
 
             Serialization = endpointConfiguration.Serialization;
+
+            Transport = endpointConfiguration.Transport;
+        }
+
+        public int? ConcurrentMessageLimit
+        {
+            get => Transport.ConcurrentMessageLimit;
+            set => Transport.Configurator.ConcurrentMessageLimit = value;
+        }
+
+        public int PrefetchCount
+        {
+            get => Transport.PrefetchCount;
+            set => Transport.Configurator.PrefetchCount = value;
         }
 
         public bool AutoStart
@@ -201,6 +206,14 @@
             callback(Receive.ErrorConfigurator);
         }
 
+        public void ConfigureTransport(Action<ITransportConfigurator> callback)
+        {
+            if (callback == null)
+                throw new ArgumentNullException(nameof(callback));
+
+            callback(Transport.Configurator);
+        }
+
         public virtual IEnumerable<ValidationResult> Validate()
         {
             return Send.Specification.Validate()
@@ -208,7 +221,8 @@
                 .Concat(Consume.Specification.Validate())
                 .Concat(Receive.Specification.Validate())
                 .Concat(Topology.Validate())
-                .Concat(Serialization.Validate());
+                .Concat(Serialization.Validate())
+                .Concat(Transport.Validate());
         }
 
         public IConsumePipeConfiguration Consume { get; }
@@ -217,6 +231,7 @@
         public IReceivePipeConfiguration Receive { get; }
         public ITopologyConfiguration Topology { get; }
         public ISerializationConfiguration Serialization { get; }
+        public ITransportConfiguration Transport { get; }
 
         public void SetMessageSerializer(SerializerFactory serializerFactory)
         {

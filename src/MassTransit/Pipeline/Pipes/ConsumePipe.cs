@@ -6,7 +6,6 @@ namespace MassTransit.Pipeline.Pipes
     using ConsumePipeSpecifications;
     using GreenPipes;
     using GreenPipes.Filters;
-    using GreenPipes.Internals.Extensions;
     using Util;
 
 
@@ -52,14 +51,21 @@ namespace MassTransit.Pipeline.Pipes
             return _dynamicFilter.ConnectObserver(new ConsumeObserverAdapter<TMessage>(observer));
         }
 
-        ConnectHandle IConsumePipeConnector.ConnectConsumePipe<T>(IPipe<ConsumeContext<T>> pipe)
+        public ConnectHandle ConnectConsumePipe<T>(IPipe<ConsumeContext<T>> pipe)
+            where T : class
         {
             var handle = _dynamicFilter.ConnectPipe(BuildMessagePipe(pipe));
 
             if (_connected.Task.Status == TaskStatus.WaitingForActivation)
-                _connected.TrySetResultOnThreadPool(true);
+                _connected.TrySetResult(true);
 
             return handle;
+        }
+
+        public ConnectHandle ConnectConsumePipe<T>(IPipe<ConsumeContext<T>> pipe, ConnectPipeOptions options)
+            where T : class
+        {
+            return ConnectConsumePipe(pipe);
         }
 
         ConnectHandle IRequestPipeConnector.ConnectRequestPipe<T>(Guid requestId, IPipe<ConsumeContext<T>> pipe)
@@ -67,7 +73,7 @@ namespace MassTransit.Pipeline.Pipes
             var handle = _dynamicFilter.ConnectPipe(requestId, BuildMessagePipe(pipe));
 
             if (_connected.Task.Status == TaskStatus.WaitingForActivation)
-                _connected.TrySetResultOnThreadPool(true);
+                _connected.TrySetResult(true);
 
             return handle;
         }

@@ -49,7 +49,7 @@
 
         protected override Task StopSupervisor(StopSupervisorContext context)
         {
-            LogContext.Debug?.Log("Stopping send transport: {EntityName}", _context.EntityName);
+            TransportLogMessages.StoppingSendTransport(_context.EntityName);
 
             return base.StopSupervisor(context);
         }
@@ -99,6 +99,8 @@
 
                     transportMessage.NMSDeliveryMode = context.Durable ? MsgDeliveryMode.Persistent : MsgDeliveryMode.NonPersistent;
 
+                    transportMessage.Content = context.Body;
+
                     if (context.MessageId.HasValue)
                         transportMessage.NMSMessageId = context.MessageId.ToString();
 
@@ -111,13 +113,16 @@
                     if (context.Priority.HasValue)
                         transportMessage.NMSPriority = context.Priority.Value;
 
-                    transportMessage.Content = context.Body;
+                    var delay = context.Delay?.TotalMilliseconds;
+                    if (delay > 0)
+                        transportMessage.Properties["AMQ_SCHEDULED_DELAY"] = (long)delay.Value;
 
                     var publishTask = Task.Run(() => producer.Send(transportMessage), context.CancellationToken);
 
                     await publishTask.OrCanceled(context.CancellationToken).ConfigureAwait(false);
 
                     context.LogSent();
+                    activity.AddSendContextHeadersPostSend(context);
 
                     if (_context.SendObservers.Count > 0)
                         await _context.SendObservers.PostSend(context).ConfigureAwait(false);

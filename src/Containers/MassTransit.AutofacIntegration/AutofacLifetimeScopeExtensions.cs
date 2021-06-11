@@ -2,8 +2,12 @@ namespace MassTransit.AutofacIntegration
 {
     using Autofac;
     using Context;
-    using GreenPipes;
+    using Courier;
+    using Courier.Contexts;
+    using Courier.Contracts;
+    using MassTransit.Registration;
     using Metadata;
+    using ScopeProviders;
 
 
     public static class AutofacLifetimeScopeExtensions
@@ -20,8 +24,7 @@ namespace MassTransit.AutofacIntegration
             return new ConsumerConsumeContextScope<TConsumer, TMessage>(consumeContext, consumer);
         }
 
-        public static ConsumerConsumeContext<TConsumer, TMessage> GetConsumerScope<TConsumer, TMessage>(this ILifetimeScope lifetimeScope,
-            ConsumeContext<TMessage> consumeContext)
+        public static ConsumerConsumeContext<TConsumer, TMessage> GetConsumerScope<TConsumer, TMessage>(this ILifetimeScope lifetimeScope)
             where TConsumer : class
             where TMessage : class
         {
@@ -29,7 +32,9 @@ namespace MassTransit.AutofacIntegration
             if (consumer == null)
                 throw new ConsumerException($"Unable to resolve consumer type '{TypeMetadataCache<TConsumer>.ShortName}'.");
 
-            return new ConsumerConsumeContextScope<TConsumer, TMessage>(consumeContext, consumer, lifetimeScope);
+            var consumeContext = lifetimeScope.Resolve<ConsumeContext<TMessage>>();
+
+            return new ConsumerConsumeContextScope<TConsumer, TMessage>(consumeContext, consumer);
         }
 
         public static SendContext<TMessage> GetSendScope<TMessage>(this ILifetimeScope lifetimeScope,
@@ -77,42 +82,87 @@ namespace MassTransit.AutofacIntegration
         public static void ConfigureScope<T>(this ContainerBuilder builder, SendContext<T> context)
             where T : class
         {
-            builder.RegisterInstance(context)
+            builder.RegisterInstance(context);
+
+            builder.Register(scope => new SendContextScope<T>(context, scope.Resolve<ILifetimeScope>()))
                 .As<SendContext>()
+                .InstancePerLifetimeScope()
                 .ExternallyOwned();
         }
 
         public static void ConfigureScope<T>(this ContainerBuilder builder, PublishContext<T> context)
             where T : class
         {
-            builder.RegisterInstance(context)
+            builder.Register(scope => new PublishContextScope<T>(context, scope.Resolve<ILifetimeScope>()))
                 .As<PublishContext>()
+                .InstancePerLifetimeScope()
                 .ExternallyOwned();
         }
 
         public static void ConfigureScope(this ContainerBuilder builder, ConsumeContext context)
         {
-            builder.RegisterInstance(context)
+            builder.Register(scope => new ConsumeContextScope(context, scope.Resolve<ILifetimeScope>()))
                 .As<ConsumeContext>()
                 .As<IPublishEndpoint>()
                 .As<ISendEndpointProvider>()
+                .InstancePerLifetimeScope()
                 .ExternallyOwned();
+
+            builder.RegisterType<AutofacScopeServiceProvider>()
+                .As<IScopeServiceProvider>()
+                .InstancePerLifetimeScope();
         }
 
         public static void ConfigureScope<T>(this ContainerBuilder builder, ConsumeContext<T> context)
             where T : class
         {
-            builder.RegisterInstance(context)
+            builder.Register(scope => new ConsumeContextScope<T>(context, scope.Resolve<ILifetimeScope>()))
                 .As<ConsumeContext>()
                 .As<ConsumeContext<T>>()
                 .As<IPublishEndpoint>()
                 .As<ISendEndpointProvider>()
+                .InstancePerLifetimeScope()
                 .ExternallyOwned();
+
+            builder.RegisterType<AutofacScopeServiceProvider>()
+                .As<IScopeServiceProvider>()
+                .InstancePerLifetimeScope();
         }
 
-        public static void UpdatePayload(this PipeContext context, ILifetimeScope scope)
+        public static void ConfigureScope<T>(this ContainerBuilder builder, ExecuteContext<T> context)
+            where T : class
         {
-            context.GetOrAddPayload(() => scope);
+            builder.Register(scope => new ExecuteContextScope<T>(context, scope.Resolve<ILifetimeScope>()))
+                .As<ExecuteContext>()
+                .As<ExecuteContext<T>>()
+                .As<ConsumeContext>()
+                .As<ConsumeContext<RoutingSlip>>()
+                .As<IPublishEndpoint>()
+                .As<ISendEndpointProvider>()
+                .InstancePerLifetimeScope()
+                .ExternallyOwned();
+
+            builder.RegisterType<AutofacScopeServiceProvider>()
+                .As<IScopeServiceProvider>()
+                .InstancePerLifetimeScope();
+        }
+
+        public static void ConfigureScope<T>(this ContainerBuilder builder, CompensateContext<T> context)
+            where T : class
+        {
+            builder.Register(scope => new CompensateContextScope<T>(context, scope.Resolve<ILifetimeScope>()))
+                .As<CompensateContext>()
+                .As<CompensateContext<T>>()
+                .As<ConsumeContext>()
+                .As<ConsumeContext<RoutingSlip>>()
+                .As<IPublishEndpoint>()
+                .As<ISendEndpointProvider>()
+                .InstancePerLifetimeScope()
+                .ExternallyOwned();
+
+            builder.RegisterType<AutofacScopeServiceProvider>()
+                .As<IScopeServiceProvider>()
+                .InstancePerLifetimeScope();
         }
     }
 }

@@ -5,8 +5,10 @@ namespace MassTransit
     using System.Linq;
     using System.Reflection;
     using Automatonymous;
+    using ConsumeConfigurators;
     using Courier;
     using Definition;
+    using Futures;
     using Internals.Extensions;
     using Metadata;
     using Registration;
@@ -17,18 +19,44 @@ namespace MassTransit
     public static class RegistrationExtensions
     {
         /// <summary>
+        /// Adds the consumer, allowing configuration when it is configured on an endpoint
+        /// </summary>
+        /// <param name="configurator"></param>
+        /// <param name="configure"></param>
+        /// <typeparam name="T">The consumer type</typeparam>
+        /// <typeparam name="TDefinition">The consumer definition type</typeparam>
+        public static IConsumerRegistrationConfigurator<T> AddConsumer<T, TDefinition>(this IRegistrationConfigurator configurator,
+            Action<IConsumerConfigurator<T>> configure = null)
+            where T : class, IConsumer
+            where TDefinition : class, IConsumerDefinition<T>
+        {
+            return configurator.AddConsumer(typeof(TDefinition), configure);
+        }
+
+        /// <summary>
         /// Adds all consumers in the specified assemblies
         /// </summary>
         /// <param name="configurator"></param>
         /// <param name="assemblies">The assemblies to scan for consumers</param>
         public static void AddConsumers(this IRegistrationConfigurator configurator, params Assembly[] assemblies)
         {
+            AddConsumers(configurator, null, assemblies);
+        }
+
+        /// <summary>
+        /// Adds all consumers that match the given filter in the specified assemblies
+        /// </summary>
+        /// <param name="configurator"></param>
+        /// <param name="filter"></param>
+        /// <param name="assemblies">The assemblies to scan for consumers</param>
+        public static void AddConsumers(this IRegistrationConfigurator configurator, Func<Type, bool> filter, params Assembly[] assemblies)
+        {
             if (assemblies.Length == 0)
                 assemblies = AppDomain.CurrentDomain.GetAssemblies();
 
             var types = AssemblyTypeCache.FindTypes(assemblies, TypeMetadataCache.IsConsumerOrDefinition).GetAwaiter().GetResult();
 
-            AddConsumers(configurator, types.FindTypes(TypeClassification.Concrete | TypeClassification.Closed).ToArray());
+            AddConsumers(configurator, filter, types.FindTypes(TypeClassification.Concrete | TypeClassification.Closed).ToArray());
         }
 
         /// <summary>
@@ -80,12 +108,26 @@ namespace MassTransit
         /// <param name="types">The state machine types to add</param>
         public static void AddConsumers(this IRegistrationConfigurator configurator, params Type[] types)
         {
+            AddConsumers(configurator, null, types);
+        }
+
+        /// <summary>
+        /// Adds the specified consumer types which match the given filter
+        /// </summary>
+        /// <param name="configurator"></param>
+        /// <param name="filter"></param>
+        /// <param name="types">The consumer types to add</param>
+        public static void AddConsumers(this IRegistrationConfigurator configurator, Func<Type, bool> filter, params Type[] types)
+        {
+            filter ??= t => true;
+
             IEnumerable<Type> consumerTypes = types.Where(TypeMetadataCache.HasConsumerInterfaces);
             IEnumerable<Type> consumerDefinitionTypes = types.Where(x => x.HasInterface(typeof(IConsumerDefinition<>)));
 
             var consumers = from c in consumerTypes
                 join d in consumerDefinitionTypes on c equals d.GetClosingArgument(typeof(IConsumerDefinition<>)) into dc
                 from d in dc.DefaultIfEmpty()
+                where filter(c)
                 select new
                 {
                     ConsumerType = c,
@@ -94,6 +136,22 @@ namespace MassTransit
 
             foreach (var consumer in consumers)
                 configurator.AddConsumer(consumer.ConsumerType, consumer.DefinitionType);
+        }
+
+        /// <summary>
+        /// Adds the saga, allowing configuration when it is configured on the endpoint. This should not
+        /// be used for state machine (Automatonymous) sagas.
+        /// </summary>
+        /// <param name="configurator"></param>
+        /// <param name="configure"></param>
+        /// <typeparam name="T">The saga type</typeparam>
+        /// <typeparam name="TDefinition">The saga definition type</typeparam>
+        public static ISagaRegistrationConfigurator<T> AddSaga<T, TDefinition>(this IRegistrationConfigurator configurator,
+            Action<ISagaConfigurator<T>> configure = null)
+            where T : class, ISaga
+            where TDefinition : class, ISagaDefinition<T>
+        {
+            return configurator.AddSaga(typeof(TDefinition), configure);
         }
 
         /// <summary>
@@ -177,6 +235,24 @@ namespace MassTransit
         }
 
         /// <summary>
+        /// Adds a SagaStateMachine to the registry and updates the registrar prior to registering so that the default
+        /// saga registrar isn't notified.
+        /// </summary>
+        /// <param name="configurator"></param>
+        /// <param name="configure"></param>
+        /// <typeparam name="TStateMachine">The state machine type</typeparam>
+        /// <typeparam name="T">The state machine instance type</typeparam>
+        /// <typeparam name="TDefinition">The saga definition type</typeparam>
+        public static ISagaRegistrationConfigurator<T> AddSagaStateMachine<TStateMachine, T, TDefinition>(this IRegistrationConfigurator configurator,
+            Action<ISagaConfigurator<T>> configure = null)
+            where T : class, SagaStateMachineInstance
+            where TStateMachine : class, SagaStateMachine<T>
+            where TDefinition : class, ISagaDefinition<T>
+        {
+            return configurator.AddSagaStateMachine<TStateMachine, T>(typeof(TDefinition), configure);
+        }
+
+        /// <summary>
         /// Adds SagaStateMachines to the registry, using the factory method, and updates the registrar prior to registering so that the default
         /// saga registrar isn't notified.
         /// </summary>
@@ -187,7 +263,9 @@ namespace MassTransit
             if (assemblies.Length == 0)
                 assemblies = AppDomain.CurrentDomain.GetAssemblies();
 
-            var types = AssemblyTypeCache.FindTypes(assemblies, TypeMetadataCache.IsSagaStateMachineOrDefinition).GetAwaiter().GetResult();
+            var types = AssemblyTypeCache.FindTypes(assemblies,
+                    type => TypeMetadataCache.IsSagaStateMachineOrDefinition(type) && !TypeMetadataCache.IsFutureOrDefinition(type))
+                .GetAwaiter().GetResult();
 
             configurator.AddSagaStateMachines(types.FindTypes(TypeClassification.Concrete | TypeClassification.Closed).ToArray());
         }
@@ -223,7 +301,9 @@ namespace MassTransit
             {
                 bool IsAllowed(Type candidate)
                 {
-                    return TypeMetadataCache.IsSagaStateMachineOrDefinition(candidate) && filter(candidate);
+                    return TypeMetadataCache.IsSagaStateMachineOrDefinition(candidate)
+                        && !TypeMetadataCache.IsFutureOrDefinition(type)
+                        && filter(candidate);
                 }
 
                 types = FindTypesInNamespace(type, IsAllowed);
@@ -278,6 +358,47 @@ namespace MassTransit
 
                 SagaStateMachineRegistrationCache.Register(type, registrar);
             }
+        }
+
+        /// <summary>
+        /// Adds an execute activity (Courier), allowing configuration when it is configured on the endpoint.
+        /// </summary>
+        /// <param name="configurator"></param>
+        /// <param name="configure"></param>
+        /// <typeparam name="TActivity">The activity type</typeparam>
+        /// <typeparam name="TArguments">The argument type</typeparam>
+        /// <typeparam name="TDefinition">The activity definition type</typeparam>
+        /// <returns></returns>
+        public static IExecuteActivityRegistrationConfigurator<TActivity, TArguments> AddExecuteActivity<TActivity, TArguments, TDefinition>(
+            this IRegistrationConfigurator configurator, Action<IExecuteActivityConfigurator<TActivity, TArguments>> configure = null)
+            where TActivity : class, IExecuteActivity<TArguments>
+            where TArguments : class
+            where TDefinition : class, IExecuteActivityDefinition<TActivity, TArguments>
+        {
+            return configurator.AddExecuteActivity(typeof(TDefinition), configure);
+        }
+
+        /// <summary>
+        /// Adds an activity (Courier), allowing configuration when it is configured on the endpoint.
+        /// </summary>
+        /// <param name="configurator"></param>
+        /// <param name="configureExecute">The execute configuration callback</param>
+        /// <param name="configureCompensate">The compensate configuration callback</param>
+        /// <typeparam name="TActivity">The activity type</typeparam>
+        /// <typeparam name="TArguments">The argument type</typeparam>
+        /// <typeparam name="TLog">The log type</typeparam>
+        /// <typeparam name="TDefinition">The activity definition type</typeparam>
+        /// <returns></returns>
+        public static IActivityRegistrationConfigurator<TActivity, TArguments, TLog> AddActivity<TActivity, TArguments, TLog, TDefinition>(
+            this IRegistrationConfigurator configurator,
+            Action<IExecuteActivityConfigurator<TActivity, TArguments>> configureExecute = null,
+            Action<ICompensateActivityConfigurator<TActivity, TLog>> configureCompensate = null)
+            where TActivity : class, IActivity<TArguments, TLog>
+            where TArguments : class
+            where TDefinition : class, IActivityDefinition<TActivity, TArguments, TLog>
+            where TLog : class
+        {
+            return configurator.AddActivity(typeof(TDefinition), configureExecute, configureCompensate);
         }
 
         /// <summary>
@@ -342,8 +463,8 @@ namespace MassTransit
         /// <param name="types">The state machine types to add</param>
         public static void AddActivities(this IRegistrationConfigurator configurator, params Type[] types)
         {
-            IEnumerable<Type> activityTypes = types.Where(x => x.HasInterface(typeof(IActivity<,>)));
-            IEnumerable<Type> activityDefinitionTypes = types.Where(x => x.HasInterface(typeof(IActivityDefinition<,,>)));
+            IEnumerable<Type> activityTypes = types.Where(x => x.HasInterface(typeof(IActivity<,>))).ToList();
+            IEnumerable<Type> activityDefinitionTypes = types.Where(x => x.HasInterface(typeof(IActivityDefinition<,,>))).ToList();
 
             var activities = from c in activityTypes
                 join d in activityDefinitionTypes on c equals d.GetClosingArguments(typeof(IActivityDefinition<,,>)).First() into dc
@@ -357,8 +478,8 @@ namespace MassTransit
             foreach (var activity in activities)
                 configurator.AddActivity(activity.ActivityType, activity.DefinitionType);
 
-            IEnumerable<Type> executeActivityTypes = types.Where(x => x.HasInterface(typeof(IExecuteActivity<>))).Except(activityTypes);
-            IEnumerable<Type> executeActivityDefinitionTypes = types.Where(x => x.HasInterface(typeof(IExecuteActivityDefinition<,>)));
+            IEnumerable<Type> executeActivityTypes = types.Where(x => x.HasInterface(typeof(IExecuteActivity<>))).Except(activityTypes).ToList();
+            IEnumerable<Type> executeActivityDefinitionTypes = types.Where(x => x.HasInterface(typeof(IExecuteActivityDefinition<,>))).ToList();
 
             var executeActivities = from c in executeActivityTypes
                 join d in executeActivityDefinitionTypes on c equals d.GetClosingArguments(typeof(IExecuteActivityDefinition<,>)).First() into dc
@@ -389,14 +510,160 @@ namespace MassTransit
 
         static IEnumerable<Type> FindTypesInNamespace(Type type, Func<Type, bool> typeFilter)
         {
+            if (type.Namespace == null)
+                throw new ArgumentException("The type must have a valid namespace", nameof(type));
+
+            var dottedNamespace = type.Namespace + ".";
+
             bool Filter(Type candidate)
             {
                 return typeFilter(candidate)
                     && candidate.Namespace != null
-                    && candidate.Namespace.StartsWith(type.Namespace, StringComparison.OrdinalIgnoreCase);
+                    && (candidate.Namespace.StartsWith(dottedNamespace, StringComparison.OrdinalIgnoreCase)
+                        || candidate.Namespace.Equals(type.Namespace, StringComparison.OrdinalIgnoreCase));
             }
 
             return AssemblyTypeCache.FindTypes(type.Assembly, TypeClassification.Concrete | TypeClassification.Closed, Filter).GetAwaiter().GetResult();
+        }
+
+        /// <summary>
+        /// Adds the consumer, allowing configuration when it is configured on an endpoint
+        /// </summary>
+        /// <param name="configurator"></param>
+        /// <typeparam name="T">The consumer type</typeparam>
+        /// <typeparam name="TDefinition">The consumer definition type</typeparam>
+        public static IFutureRegistrationConfigurator<T> AddFuture<T, TDefinition>(this IRegistrationConfigurator configurator)
+            where T : MassTransitStateMachine<FutureState>
+            where TDefinition : class, IFutureDefinition<T>
+        {
+            return configurator.AddFuture<T>(typeof(TDefinition));
+        }
+
+        /// <summary>
+        /// Adds a combined consumer/future, where the future handles the requests and the consumer is only known to the future.
+        /// This is a shortcut method,
+        /// </summary>
+        /// <param name="configurator"></param>
+        /// <param name="configure"></param>
+        /// <typeparam name="TFuture">The consumer type</typeparam>
+        /// <typeparam name="TConsumer"></typeparam>
+        /// <typeparam name="TRequest"></typeparam>
+        /// <typeparam name="TResponse"></typeparam>
+        public static IFutureRegistrationConfigurator<TFuture> AddFutureRequestConsumer<TFuture, TConsumer, TRequest, TResponse>(
+            this IRegistrationConfigurator configurator, Action<IConsumerConfigurator<TConsumer>> configure = null)
+            where TFuture : Future<TRequest, TResponse>
+            where TRequest : class
+            where TResponse : class
+            where TConsumer : class, IConsumer<TRequest>
+        {
+            configurator.AddConsumer<TConsumer, FutureRequestConsumerDefinition<TConsumer, TRequest>>(configure);
+
+            return configurator.AddFuture<TFuture, RequestConsumerFutureDefinition<TFuture, TConsumer, TRequest, TResponse>>();
+        }
+
+        /// <summary>
+        /// Adds all futures in the specified assemblies
+        /// </summary>
+        /// <param name="configurator"></param>
+        /// <param name="assemblies">The assemblies to scan for futures</param>
+        public static void AddFutures(this IRegistrationConfigurator configurator, params Assembly[] assemblies)
+        {
+            AddFutures(configurator, null, assemblies);
+        }
+
+        /// <summary>
+        /// Adds all futures that match the given filter in the specified assemblies
+        /// </summary>
+        /// <param name="configurator"></param>
+        /// <param name="filter"></param>
+        /// <param name="assemblies">The assemblies to scan for futures</param>
+        public static void AddFutures(this IRegistrationConfigurator configurator, Func<Type, bool> filter, params Assembly[] assemblies)
+        {
+            if (assemblies.Length == 0)
+                assemblies = AppDomain.CurrentDomain.GetAssemblies();
+
+            var types = AssemblyTypeCache.FindTypes(assemblies, TypeMetadataCache.IsFutureOrDefinition).GetAwaiter().GetResult();
+
+            AddFutures(configurator, filter, types.FindTypes(TypeClassification.Concrete | TypeClassification.Closed).ToArray());
+        }
+
+        /// <summary>
+        /// Adds all futures from the assembly containing the specified type that are in the same (or deeper) namespace.
+        /// </summary>
+        /// <param name="configurator"></param>
+        /// <param name="filter"></param>
+        /// <typeparam name="T">The anchor type</typeparam>
+        public static void AddFuturesFromNamespaceContaining<T>(this IRegistrationConfigurator configurator, Func<Type, bool> filter = null)
+        {
+            AddFuturesFromNamespaceContaining(configurator, typeof(T), filter);
+        }
+
+        /// <summary>
+        /// Adds all futures in the specified assemblies matching the namespace
+        /// </summary>
+        /// <param name="configurator"></param>
+        /// <param name="type">The type to use to identify the assembly and namespace to scan</param>
+        /// <param name="filter"></param>
+        public static void AddFuturesFromNamespaceContaining(this IRegistrationConfigurator configurator, Type type, Func<Type, bool> filter = null)
+        {
+            if (type == null)
+                throw new ArgumentNullException(nameof(type));
+
+            if (type.Assembly == null || type.Namespace == null)
+                throw new ArgumentException($"The type {TypeMetadataCache.GetShortName(type)} is not in an assembly with a valid namespace", nameof(type));
+
+            IEnumerable<Type> types;
+            if (filter != null)
+            {
+                bool IsAllowed(Type candidate)
+                {
+                    return TypeMetadataCache.IsFutureOrDefinition(candidate) && filter(candidate);
+                }
+
+                types = FindTypesInNamespace(type, IsAllowed);
+            }
+            else
+                types = FindTypesInNamespace(type, TypeMetadataCache.IsFutureOrDefinition);
+
+            AddFutures(configurator, types.ToArray());
+        }
+
+        /// <summary>
+        /// Adds the specified consumer types
+        /// </summary>
+        /// <param name="configurator"></param>
+        /// ˆ
+        /// <param name="types">The state machine types to add</param>
+        public static void AddFutures(this IRegistrationConfigurator configurator, params Type[] types)
+        {
+            AddFutures(configurator, null, types);
+        }
+
+        /// <summary>
+        /// Adds the specified consumer types which match the given filter
+        /// </summary>
+        /// <param name="configurator"></param>
+        /// <param name="filter"></param>
+        /// <param name="types">The consumer types to add</param>
+        public static void AddFutures(this IRegistrationConfigurator configurator, Func<Type, bool> filter, params Type[] types)
+        {
+            filter ??= t => true;
+
+            IEnumerable<Type> consumerTypes = types.Where(x => x.HasInterface(typeof(SagaStateMachine<FutureState>)));
+            IEnumerable<Type> consumerDefinitionTypes = types.Where(x => x.HasInterface(typeof(IFutureDefinition<>)));
+
+            var futures = from c in consumerTypes
+                join d in consumerDefinitionTypes on c equals d.GetClosingArgument(typeof(IFutureDefinition<>)) into dc
+                from d in dc.DefaultIfEmpty()
+                where filter(c)
+                select new
+                {
+                    FutureType = c,
+                    DefinitionType = d
+                };
+
+            foreach (var future in futures)
+                configurator.AddFuture(future.FutureType, future.DefinitionType);
         }
     }
 }

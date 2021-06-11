@@ -7,6 +7,7 @@
     using GreenPipes.Util;
     using NUnit.Framework;
     using Shouldly;
+    using TestFramework;
     using Testing;
 
 
@@ -52,10 +53,10 @@
             }
 
             _harness = new InMemoryTestHarness();
-            _harness.OnConnectObservers += bus =>
+            _harness.OnConfigureInMemoryBus += configurator =>
             {
-                bus.ConnectSendAuditObservers(_store);
-                bus.ConnectConsumeAuditObserver(_store);
+                configurator.ConnectSendAuditObservers(_store);
+                configurator.ConnectConsumeAuditObserver(_store);
             };
             _consumer = _harness.Consumer<TestConsumer>();
 
@@ -72,12 +73,11 @@
 
         async Task<int> GetAuditRecords(string contextType)
         {
-            using (var dbContext = _store.AuditContext)
-            {
-                return await dbContext.Set<AuditRecord>()
-                    .Where(x => x.ContextType == contextType)
-                    .CountAsync();
-            }
+            using var dbContext = _store.AuditContext;
+
+            return await dbContext.Set<AuditRecord>()
+                .Where(x => x.ContextType == contextType)
+                .CountAsync();
         }
 
 

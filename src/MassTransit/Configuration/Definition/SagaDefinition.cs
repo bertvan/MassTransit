@@ -46,15 +46,10 @@ namespace MassTransit.Definition
 
         void ISagaDefinition<TSaga>.Configure(IReceiveEndpointConfigurator endpointConfigurator, ISagaConfigurator<TSaga> sagaConfigurator)
         {
-            if (_concurrentMessageLimit.HasValue)
+            if (_concurrentMessageLimit.HasValue && endpointConfigurator.ConcurrentMessageLimit > _concurrentMessageLimit)
                 sagaConfigurator.UseConcurrentMessageLimit(_concurrentMessageLimit.Value);
 
             ConfigureSaga(endpointConfigurator, sagaConfigurator);
-        }
-
-        public void Configure<T>(IReceiveEndpointConfigurator endpointConfigurator, ISagaMessageConfigurator<TSaga, T> sagaMessageConfigurator)
-            where T : class
-        {
         }
 
         Type ISagaDefinition.SagaType => typeof(TSaga);
@@ -87,18 +82,6 @@ namespace MassTransit.Definition
             configure?.Invoke(configurator);
 
             EndpointDefinition = new SagaEndpointDefinition<TSaga>(configurator.Settings);
-        }
-
-        /// <summary>
-        /// Called when configuring the saga on the endpoint. Configuration only applies to this saga, and does not apply to
-        /// the endpoint.
-        /// </summary>
-        /// <param name="endpointConfigurator">The receive endpoint configurator for the consumer</param>
-        /// <param name="sagaMessageConfigurator">The saga message configurator</param>
-        protected virtual void ConfigureSagaMessage<T>(IReceiveEndpointConfigurator endpointConfigurator, ISagaMessageConfigurator<TSaga, T>
-            sagaMessageConfigurator)
-            where T : class
-        {
         }
     }
 }

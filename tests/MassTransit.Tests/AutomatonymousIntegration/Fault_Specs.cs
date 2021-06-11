@@ -20,15 +20,13 @@
             var message = new Initialize();
             await InputQueueSendEndpoint.Send(message);
 
-            Guid? saga = await _repository.ShouldContainSaga(x => x.CorrelationId == message.CorrelationId
-                && GetCurrentState(x) == _machine.WaitingToStart, TestTimeout);
+            Guid? saga = await _repository.ShouldContainSagaInState(message.CorrelationId, _machine, x => x.WaitingToStart, TestTimeout);
             Assert.IsTrue(saga.HasValue);
-
 
             await InputQueueSendEndpoint.Send(new Start(message.CorrelationId));
 
-            saga = await _repository.ShouldContainSaga(x => x.CorrelationId == message.CorrelationId
-                && GetCurrentState(x) == _machine.FailedToStart, TestTimeout);
+            saga = await _repository.ShouldContainSagaInState(message.CorrelationId, _machine, x => x.FailedToStart, TestTimeout);
+
             Assert.IsTrue(saga.HasValue);
         }
 
@@ -38,7 +36,7 @@
             var message = new Start();
 
             Task<ConsumeContext<Fault<Start>>> faultReceived =
-                ConnectPublishHandler<Fault<Start>>(x => message.CorrelationId == x.Message.Message.CorrelationId);
+                await ConnectPublishHandler<Fault<Start>>(x => message.CorrelationId == x.Message.Message.CorrelationId);
 
             await InputQueueSendEndpoint.Send(message);
 
@@ -53,13 +51,11 @@
             var message = new Initialize();
 
             Task<ConsumeContext<Fault<Start>>> faultReceived =
-                ConnectPublishHandler<Fault<Start>>(x => message.CorrelationId == x.Message.Message.CorrelationId);
+                await ConnectPublishHandler<Fault<Start>>(x => message.CorrelationId == x.Message.Message.CorrelationId);
 
             await InputQueueSendEndpoint.Send(message);
 
-            Guid? saga = await _repository.ShouldContainSaga(
-                x => x.CorrelationId == message.CorrelationId && x.CurrentState == _machine.WaitingToStart, TestTimeout);
-
+            Guid? saga = await _repository.ShouldContainSagaInState(message.CorrelationId, _machine, x => x.WaitingToStart, TestTimeout);
 
             await InputQueueSendEndpoint.Send(new Start(message.CorrelationId));
 
@@ -67,8 +63,7 @@
 
             Assert.AreEqual(message.CorrelationId, fault.Message.Message.CorrelationId);
 
-            saga = await _repository.ShouldContainSaga(
-                x => x.CorrelationId == message.CorrelationId && x.CurrentState == _machine.FailedToStart, TestTimeout);
+            saga = await _repository.ShouldContainSagaInState(message.CorrelationId, _machine, x => x.FailedToStart, TestTimeout);
 
             Assert.IsTrue(saga.HasValue);
         }
@@ -79,7 +74,7 @@
             var message = new Stop();
 
             Task<ConsumeContext<Fault<Stop>>> faultReceived =
-                ConnectPublishHandler<Fault<Stop>>(x => message.CorrelationId == x.Message.Message.CorrelationId);
+                await ConnectPublishHandler<Fault<Stop>>(x => message.CorrelationId == x.Message.Message.CorrelationId);
 
             await InputQueueSendEndpoint.Send(message);
 
@@ -103,11 +98,6 @@
             _repository = new InMemorySagaRepository<Instance>();
 
             configurator.StateMachineSaga(_machine, _repository);
-        }
-
-        State GetCurrentState(Instance state)
-        {
-            return _machine.GetState(state).Result;
         }
 
         TestStateMachine _machine;

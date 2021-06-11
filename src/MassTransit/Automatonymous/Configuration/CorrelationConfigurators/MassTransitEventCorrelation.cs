@@ -14,56 +14,64 @@
         where TInstance : class, SagaStateMachineInstance
         where TData : class
     {
-        readonly Event<TData> _event;
         readonly bool _insertOnInitial;
         readonly SagaStateMachine<TInstance> _machine;
-        readonly IFilter<ConsumeContext<TData>> _messageFilter;
         readonly IPipe<ConsumeContext<TData>> _missingPipe;
         readonly Lazy<ISagaPolicy<TInstance, TData>> _policy;
+        readonly bool _readOnly;
         readonly ISagaFactory<TInstance, TData> _sagaFactory;
 
         public MassTransitEventCorrelation(SagaStateMachine<TInstance> machine, Event<TData> @event, SagaFilterFactory<TInstance, TData> sagaFilterFactory,
             IFilter<ConsumeContext<TData>> messageFilter, IPipe<ConsumeContext<TData>> missingPipe, ISagaFactory<TInstance, TData> sagaFactory,
-            bool insertOnInitial)
+            bool insertOnInitial, bool readOnly, bool configureConsumeTopology)
         {
-            _event = @event;
+            Event = @event;
             FilterFactory = sagaFilterFactory;
-            _messageFilter = messageFilter;
+            MessageFilter = messageFilter;
             _missingPipe = missingPipe;
             _sagaFactory = sagaFactory;
             _insertOnInitial = insertOnInitial;
+            _readOnly = readOnly;
+            ConfigureConsumeTopology = configureConsumeTopology;
             _machine = machine;
 
             _policy = new Lazy<ISagaPolicy<TInstance, TData>>(GetSagaPolicy);
         }
 
+        public bool ConfigureConsumeTopology { get; }
+
         public SagaFilterFactory<TInstance, TData> FilterFactory { get; }
 
-        Event<TData> EventCorrelation<TInstance, TData>.Event => _event;
+        public Event<TData> Event { get; }
 
-        Type EventCorrelation.DataType => typeof(TData);
+        public Type DataType => typeof(TData);
 
-        IFilter<ConsumeContext<TData>> EventCorrelation<TInstance, TData>.MessageFilter => _messageFilter;
+        public IFilter<ConsumeContext<TData>> MessageFilter { get; }
 
-        ISagaPolicy<TInstance, TData> EventCorrelation<TInstance, TData>.Policy => _policy.Value;
+        public ISagaPolicy<TInstance, TData> Policy => _policy.Value;
 
         public IEnumerable<ValidationResult> Validate()
         {
-            yield break;
+            if (_insertOnInitial && _readOnly)
+                yield return this.Failure("ReadOnly", "ReadOnly cannot be set when InsertOnInitial is true");
+
+            if (IncludesInitial() && _readOnly)
+                yield return this.Failure("ReadOnly", "ReadOnly cannot be used for events in the initial state");
         }
 
         ISagaPolicy<TInstance, TData> GetSagaPolicy()
         {
-            State[] states = _machine.States
-                .Where(state => _machine.NextEvents(state).Contains(_event))
-                .ToArray();
-
-            var includesInitial = states.Any(x => x.Name.Equals(_machine.Initial.Name));
-
-            if (includesInitial)
+            if (IncludesInitial())
                 return new NewOrExistingSagaPolicy<TInstance, TData>(_sagaFactory, _insertOnInitial);
 
-            return new AnyExistingSagaPolicy<TInstance, TData>(_missingPipe);
+            return new AnyExistingSagaPolicy<TInstance, TData>(_missingPipe, _readOnly);
+        }
+
+        bool IncludesInitial()
+        {
+            return _machine.States
+                .Where(state => _machine.NextEvents(state).Contains(Event))
+                .Any(x => x.Name.Equals(_machine.Initial.Name));
         }
     }
 }

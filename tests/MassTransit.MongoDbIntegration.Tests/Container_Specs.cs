@@ -11,6 +11,7 @@ namespace MassTransit.MongoDbIntegration.Tests
         using NUnit.Framework;
         using TestFramework;
         using TestFramework.Sagas;
+        using Testing;
 
 
         [TestFixture]
@@ -20,8 +21,8 @@ namespace MassTransit.MongoDbIntegration.Tests
             [Test]
             public async Task Should_work_as_expected()
             {
-                Task<ConsumeContext<TestStarted>> started = ConnectPublishHandler<TestStarted>();
-                Task<ConsumeContext<TestUpdated>> updated = ConnectPublishHandler<TestUpdated>();
+                Task<ConsumeContext<TestStarted>> started = await ConnectPublishHandler<TestStarted>();
+                Task<ConsumeContext<TestUpdated>> updated = await ConnectPublishHandler<TestUpdated>();
 
                 var correlationId = NewId.NextGuid();
 
@@ -32,6 +33,13 @@ namespace MassTransit.MongoDbIntegration.Tests
                 });
 
                 await started;
+
+                var repository = _provider.GetRequiredService<ISagaRepository<TestInstance>>();
+
+                var machine = _provider.GetRequiredService<TestStateMachineSaga>();
+
+                var sagaId = await repository.ShouldContainSagaInState(correlationId, machine, x => x.Active, TestTimeout);
+                Assert.That(sagaId.HasValue);
 
                 await InputQueueSendEndpoint.Send(new UpdateTest
                 {

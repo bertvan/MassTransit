@@ -8,17 +8,7 @@ When a message is published, MassTransit sends it to an exchange that is named b
 
 To configure the properties used when an exchange is created, the publish topology can be configured during bus creation:
 
-```csharp
-Bus.Factory.CreateUsingRabbitMQ(cfg =>
-{
-    cfg.Publish<OrderSubmitted>(x =>
-    {
-        x.Durable = false; // default: true
-        x.AutoDelete = true; // default: false
-        x.ExchangeType = "fanout"; // default
-    });
-});
-```
+<<< @/docs/code/topology/TopologyRabbitMqPublish.cs
 
 ### Exchange Layout
 
@@ -116,7 +106,7 @@ Bus.Factory.CreateUsingRabbitMQ(cfg =>
 {
     cfg.ReceiveEndpoint("priority-orders", x =>
     {
-        x.BindMessageExchanges = false;
+        x.ConfigureConsumeTopology = false;
 
         x.Consumer<OrderConsumer>();
 
@@ -129,7 +119,7 @@ Bus.Factory.CreateUsingRabbitMQ(cfg =>
 
     cfg.ReceiveEndpoint("regular-orders", x =>
     {
-        x.BindMessageExchanges = false;
+        x.ConfigureConsumeTopology = false;
 
         x.Consumer<OrderConsumer>();
 
@@ -253,5 +243,5 @@ The exchanges and queues for the send example are shown.
 
 ![rabbitmq-send-topology](/rabbitmq-send-topology.png)
 
-> Note that the broker topology can now be configured using the [topology](../advanced/topology/README.md) API.
+> Note that the broker topology can now be configured using the [topology](../topology/README.md) API.
 

@@ -5,6 +5,7 @@
     using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
+    using Automatonymous;
     using GreenPipes;
     using GreenPipes.Agents;
     using GreenPipes.Internals.Extensions;
@@ -16,50 +17,49 @@
         Agent,
         IReceiveEndpointCollection
     {
-        readonly ConsumeObservable _consumeObservers;
-        readonly Dictionary<string, IReceiveEndpointControl> _endpoints;
-        readonly Dictionary<string, HostReceiveEndpointHandle> _handles;
-        readonly object _mutateLock = new object();
-        readonly PublishObservable _publishObservers;
+        readonly SingleThreadedDictionary<string, ReceiveEndpoint> _endpoints;
+        readonly ReceiveEndpointStateMachine _machine;
         readonly ReceiveEndpointObservable _receiveEndpointObservers;
-        readonly ReceiveObservable _receiveObservers;
-        readonly SendObservable _sendObservers;
+        bool _started;
 
         public ReceiveEndpointCollection()
         {
-            _endpoints = new Dictionary<string, IReceiveEndpointControl>(StringComparer.OrdinalIgnoreCase);
-            _handles = new Dictionary<string, HostReceiveEndpointHandle>(StringComparer.OrdinalIgnoreCase);
-            _receiveObservers = new ReceiveObservable();
+            _machine = new ReceiveEndpointStateMachine();
+
             _receiveEndpointObservers = new ReceiveEndpointObservable();
-            _consumeObservers = new ConsumeObservable();
-            _publishObservers = new PublishObservable();
-            _sendObservers = new SendObservable();
+
+            _endpoints = new SingleThreadedDictionary<string, ReceiveEndpoint>(StringComparer.OrdinalIgnoreCase);
         }
 
-        public void Add(string endpointName, IReceiveEndpointControl endpoint)
+        public void Add(string endpointName, ReceiveEndpoint endpoint)
         {
             if (endpoint == null)
                 throw new ArgumentNullException(nameof(endpoint));
-
             if (string.IsNullOrWhiteSpace(endpointName))
                 throw new ArgumentException($"The {nameof(endpointName)} must not be null or empty", nameof(endpointName));
 
-            lock (_mutateLock)
-            {
-                if (_endpoints.ContainsKey(endpointName))
-                    throw new ConfigurationException($"A receive endpoint with the same key was already added: {endpointName}");
+            endpoint.HealthResult = _started
+                ? EndpointHealthResult.Healthy(endpoint, "starting")
+                : EndpointHealthResult.Unhealthy(endpoint, "not ready", null);
 
-                _endpoints.Add(endpointName, endpoint);
-            }
+            var added = _endpoints.TryAdd(endpointName, key =>
+            {
+                endpoint.ConnectReceiveEndpointObserver(new ReceiveEndpointStateMachineObserver(_machine, endpoint));
+
+                return endpoint;
+            });
+
+            if (!added)
+                throw new ConfigurationException($"A receive endpoint with the same key was already added: {endpointName}");
         }
 
         public HostReceiveEndpointHandle[] StartEndpoints(CancellationToken cancellationToken)
         {
-            KeyValuePair<string, IReceiveEndpointControl>[] startable;
-            lock (_mutateLock)
-                startable = _endpoints.Where(x => !_handles.ContainsKey(x.Key)).ToArray();
+            _started = true;
 
-            return startable.Select(x => StartEndpoint(x.Key, x.Value, cancellationToken)).ToArray();
+            KeyValuePair<string, ReceiveEndpoint>[] endpointsToStart = _endpoints.Where(x => !_machine.IsStarted(x.Value)).ToArray();
+
+            return endpointsToStart.Select(x => StartEndpoint(x.Key, x.Value, cancellationToken)).ToArray();
         }
 
         public HostReceiveEndpointHandle Start(string endpointName, CancellationToken cancellationToken)
@@ -67,35 +67,26 @@
             if (string.IsNullOrWhiteSpace(endpointName))
                 throw new ArgumentException($"The {nameof(endpointName)} must not be null or empty", nameof(endpointName));
 
-            IReceiveEndpointControl endpoint;
-            lock (_mutateLock)
-            {
-                if (!_endpoints.TryGetValue(endpointName, out endpoint))
-                    throw new ConfigurationException($"A receive endpoint with the key was not found: {endpointName}");
+            if (!_endpoints.TryGetValue(endpointName, out var endpoint))
+                throw new ConfigurationException($"A receive endpoint with the key was not found: {endpointName}");
 
-                if (_handles.ContainsKey(endpointName))
-                    throw new ArgumentException($"The specified endpoint has already been started: {endpointName}", nameof(endpointName));
-            }
+            if (_machine.IsStarted(endpoint))
+                throw new ArgumentException($"The specified endpoint has already been started: {endpointName}", nameof(endpointName));
 
             return StartEndpoint(endpointName, endpoint, cancellationToken);
         }
 
         public void Probe(ProbeContext context)
         {
-            foreach (KeyValuePair<string, IReceiveEndpointControl> receiveEndpoint in _endpoints)
+            foreach (KeyValuePair<string, ReceiveEndpoint> endpoint in _endpoints)
             {
                 var endpointScope = context.CreateScope("receiveEndpoint");
-                endpointScope.Add("name", receiveEndpoint.Key);
-                if (_handles.ContainsKey(receiveEndpoint.Key))
+                endpointScope.Add("name", endpoint.Key);
+                if (_machine.IsStarted(endpoint.Value))
                     endpointScope.Add("started", true);
 
-                receiveEndpoint.Value.Probe(endpointScope);
+                endpoint.Value.Probe(endpointScope);
             }
-        }
-
-        public ConnectHandle ConnectReceiveObserver(IReceiveObserver observer)
-        {
-            return _receiveObservers.Connect(observer);
         }
 
         public ConnectHandle ConnectReceiveEndpointObserver(IReceiveEndpointObserver observer)
@@ -109,57 +100,72 @@
             return new MultipleConnectHandle(_endpoints.Values.Select(x => x.ConnectConsumeMessageObserver(observer)));
         }
 
-        public ConnectHandle ConnectConsumeObserver(IConsumeObserver observer)
+        public HealthResult CheckHealth(BusState busState, string healthMessage)
         {
-            return _consumeObservers.Connect(observer);
-        }
+            var results = _endpoints.Values.Select(x => new
+            {
+                x.InputAddress,
+                Result = x.HealthResult
+            }).ToArray();
 
-        public ConnectHandle ConnectPublishObserver(IPublishObserver observer)
-        {
-            return _publishObservers.Connect(observer);
-        }
+            var unhealthy = results.Where(x => x.Result.Status == BusHealthStatus.Unhealthy).ToArray();
+            var degraded = results.Where(x => x.Result.Status == BusHealthStatus.Degraded).ToArray();
 
-        public ConnectHandle ConnectSendObserver(ISendObserver observer)
-        {
-            return _sendObservers.Connect(observer);
+            var unhappy = unhealthy.Union(degraded).ToArray();
+
+            var names = unhappy.Select(x => x.InputAddress.AbsolutePath.Split('/').LastOrDefault()).ToArray();
+
+            Dictionary<string, EndpointHealthResult> data = results.ToDictionary(x => x.InputAddress.ToString(), x => x.Result);
+
+            var exception = results.Where(x => x.Result.Exception != null).Select(x => x.Result.Exception).FirstOrDefault();
+
+            if (busState != BusState.Started || unhealthy.Any() && unhappy.Length == results.Length)
+                return HealthResult.Unhealthy($"Not ready: {healthMessage}", exception, data);
+
+            if (degraded.Any())
+                return HealthResult.Degraded($"Degraded Endpoints: {string.Join(",", names)}", exception, data);
+
+            return HealthResult.Healthy("Ready", data);
         }
 
         protected override async Task StopAgent(StopContext context)
         {
-            HostReceiveEndpointHandle[] handles;
-            lock (_mutateLock)
-                handles = _handles.Values.ToArray();
+            ReceiveEndpoint[] endpoints = _endpoints.Values.Where(x => _machine.IsStarted(x)).ToArray();
 
-            await Task.WhenAll(handles.Select(x => x.StopAsync(context.CancellationToken))).ConfigureAwait(false);
+            await Task.WhenAll(endpoints.Select(x => x.Stop(context.CancellationToken))).ConfigureAwait(false);
+
+            _started = false;
 
             await base.StopAgent(context).ConfigureAwait(false);
         }
 
-        HostReceiveEndpointHandle StartEndpoint(string endpointName, IReceiveEndpointControl endpoint, CancellationToken cancellationToken)
+        HostReceiveEndpointHandle StartEndpoint(string endpointName, ReceiveEndpoint endpoint, CancellationToken cancellationToken)
         {
             try
             {
-                var endpointReady = new ReceiveEndpointReadyObserver(endpoint, cancellationToken);
+                var observerHandle = endpoint.ConnectReceiveEndpointObserver(_receiveEndpointObservers);
 
-                var consumeObserver = endpoint.ConnectConsumeObserver(_consumeObservers);
-                var receiveObserver = endpoint.ConnectReceiveObserver(_receiveObservers);
-                var receiveEndpointObserver = endpoint.ConnectReceiveEndpointObserver(_receiveEndpointObservers);
-                var publishObserver = endpoint.ConnectPublishObserver(_publishObservers);
-                var sendObserver = endpoint.ConnectSendObserver(_sendObservers);
-                var endpointHandle = endpoint.Start();
+                void RemoveEndpoint()
+                {
+                    observerHandle.Disconnect();
+                    Remove(endpointName);
+                }
 
-                var handle = new Handle(endpointHandle, endpoint, endpointReady.Ready, () => Remove(endpointName),
-                    receiveObserver, receiveEndpointObserver, consumeObserver, publishObserver, sendObserver);
+                var handle = new Handle(endpoint, RemoveEndpoint);
 
-                lock (_mutateLock)
-                    _handles.Add(endpointName, handle);
+                handle.Start(cancellationToken);
+
+                var raiseEventTask = _machine.RaiseEvent(endpoint, _machine.ReceiveEndpointStarted, cancellationToken);
+                if (raiseEventTask.IsCompletedSuccessfully())
+                    return handle;
+
+                TaskUtil.Await(() => raiseEventTask, cancellationToken);
 
                 return handle;
             }
             catch
             {
-                lock (_mutateLock)
-                    _endpoints.Remove(endpointName);
+                _endpoints.TryRemove(endpointName, out _);
 
                 throw;
             }
@@ -170,138 +176,41 @@
             if (string.IsNullOrWhiteSpace(endpointName))
                 throw new ArgumentException($"The {nameof(endpointName)} must not be null or empty", nameof(endpointName));
 
-            lock (_mutateLock)
-            {
-                _endpoints.Remove(endpointName);
-                _handles.Remove(endpointName);
-            }
+            _endpoints.TryRemove(endpointName, out _);
         }
 
 
         class Handle :
             HostReceiveEndpointHandle
         {
-            readonly ReceiveEndpointHandle _endpointHandle;
-            readonly ConnectHandle[] _handles;
-            readonly Action _onStopped;
-            bool _stopped;
+            readonly ReceiveEndpoint _endpoint;
+            readonly Action _remove;
 
-            public Handle(ReceiveEndpointHandle endpointHandle, IReceiveEndpoint receiveEndpoint, Task<ReceiveEndpointReady> ready, Action onStopped,
-                params ConnectHandle[] handles)
+            ReceiveEndpointHandle _endpointHandle;
+
+            public Handle(ReceiveEndpoint endpoint, Action remove)
             {
-                _endpointHandle = endpointHandle;
-                _onStopped = onStopped;
-                _handles = handles;
-                ReceiveEndpoint = receiveEndpoint;
-
-                Ready = ready;
+                _endpoint = endpoint;
+                _remove = remove;
             }
 
-            public IReceiveEndpoint ReceiveEndpoint { get; }
-            public Task<ReceiveEndpointReady> Ready { get; }
+            public IReceiveEndpoint ReceiveEndpoint => _endpoint;
+
+            Task<ReceiveEndpointReady> HostReceiveEndpointHandle.Ready => _endpointHandle.Ready;
 
             public async Task StopAsync(CancellationToken cancellationToken)
             {
-                if (_stopped)
+                await _endpoint.Stop(true, cancellationToken).ConfigureAwait(false);
+
+                _remove();
+            }
+
+            public void Start(CancellationToken cancellationToken)
+            {
+                if (_endpointHandle != null)
                     return;
 
-                foreach (var handle in _handles)
-                    handle.Disconnect();
-
-                await _endpointHandle.Stop(cancellationToken).ConfigureAwait(false);
-
-                _onStopped();
-
-                _stopped = true;
-            }
-        }
-
-
-        class ReceiveEndpointReadyObserver
-        {
-            readonly Observer _observer;
-
-            public ReceiveEndpointReadyObserver(IReceiveEndpoint receiveEndpoint, CancellationToken cancellationToken)
-            {
-                _observer = new Observer(receiveEndpoint, cancellationToken);
-            }
-
-            public Task<ReceiveEndpointReady> Ready => _observer.Ready;
-
-
-            class Observer :
-                IReceiveEndpointObserver
-            {
-                readonly CancellationToken _cancellationToken;
-                readonly ConnectHandle _handle;
-                readonly TaskCompletionSource<ReceiveEndpointReady> _ready;
-                ReceiveEndpointFaulted _faulted;
-                CancellationTokenRegistration _registration;
-
-                public Observer(IReceiveEndpointObserverConnector endpoint, CancellationToken cancellationToken)
-                {
-                    _cancellationToken = cancellationToken;
-                    _ready = TaskUtil.GetTask<ReceiveEndpointReady>();
-
-                    if (cancellationToken.CanBeCanceled)
-                    {
-                        _registration = cancellationToken.Register(() =>
-                        {
-                            if (_faulted != null)
-                            {
-                                _handle?.Disconnect();
-                                _ready.TrySetExceptionOnThreadPool(_faulted.Exception);
-                            }
-
-                            _registration.Dispose();
-                        });
-                    }
-
-                    _handle = endpoint.ConnectReceiveEndpointObserver(this);
-                }
-
-                public Task<ReceiveEndpointReady> Ready => _ready.Task;
-
-                Task IReceiveEndpointObserver.Ready(ReceiveEndpointReady ready)
-                {
-                    _handle.Disconnect();
-                    _registration.Dispose();
-
-                    return _ready.TrySetResultOnThreadPool(ready);
-                }
-
-                public Task Stopping(ReceiveEndpointStopping stopping)
-                {
-                    return TaskUtil.Completed;
-                }
-
-                Task IReceiveEndpointObserver.Completed(ReceiveEndpointCompleted completed)
-                {
-                    return TaskUtil.Completed;
-                }
-
-                Task IReceiveEndpointObserver.Faulted(ReceiveEndpointFaulted faulted)
-                {
-                    _faulted = faulted;
-
-                    if (_cancellationToken.IsCancellationRequested || IsUnrecoverable(faulted.Exception))
-                    {
-                        _handle.Disconnect();
-
-                        return _ready.TrySetExceptionOnThreadPool(faulted.Exception);
-                    }
-
-                    return TaskUtil.Completed;
-                }
-
-                static bool IsUnrecoverable(Exception exception)
-                {
-                    return exception switch
-                    {
-                        ConnectionException connectionException => !connectionException.IsTransient,
-                        _ => false
-                    };
-                }
+                _endpointHandle = _endpoint.Start(cancellationToken);
             }
         }
     }

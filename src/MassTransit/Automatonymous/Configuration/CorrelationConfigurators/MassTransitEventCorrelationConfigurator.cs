@@ -18,7 +18,6 @@
     {
         readonly Event<TData> _event;
         readonly SagaStateMachine<TInstance> _machine;
-        bool _insertOnInitial;
         IFilter<ConsumeContext<TData>> _messageFilter;
         IPipe<ConsumeContext<TData>> _missingPipe;
         ISagaFactory<TInstance, TData> _sagaFactory;
@@ -28,7 +27,10 @@
         {
             _event = @event;
             _machine = machine;
-            _insertOnInitial = false;
+
+            InsertOnInitial = false;
+            ReadOnly = false;
+            ConfigureConsumeTopology = true;
 
             _sagaFactory = new DefaultSagaFactory<TInstance, TData>();
 
@@ -43,13 +45,14 @@
         public EventCorrelation Build()
         {
             return new MassTransitEventCorrelation<TInstance, TData>(_machine, _event, _sagaFilterFactory, _messageFilter, _missingPipe, _sagaFactory,
-                _insertOnInitial);
+                InsertOnInitial, ReadOnly, ConfigureConsumeTopology);
         }
 
-        public bool InsertOnInitial
-        {
-            set => _insertOnInitial = value;
-        }
+        public bool InsertOnInitial { get; set; }
+
+        public bool ReadOnly { get; set; }
+
+        public bool ConfigureConsumeTopology { get; set; }
 
         public IEventCorrelationConfigurator<TInstance, TData> CorrelateById(Func<ConsumeContext<TData>, Guid> selector)
         {
@@ -72,7 +75,8 @@
 
             _sagaFilterFactory = (repository, policy, sagaPipe) =>
             {
-                var queryFactory = new PropertyExpressionSagaQueryFactory<TInstance, TData, T>(propertyExpression, selector);
+                var propertySelector = new NotDefaultValueTypeSagaQueryPropertySelector<TData, T>(selector);
+                var queryFactory = new PropertyExpressionSagaQueryFactory<TInstance, TData, T>(propertyExpression, propertySelector);
 
                 return new QuerySagaFilter<TInstance, TData>(repository, policy, queryFactory, sagaPipe);
             };
@@ -92,7 +96,8 @@
 
             _sagaFilterFactory = (repository, policy, sagaPipe) =>
             {
-                var queryFactory = new PropertyExpressionSagaQueryFactory<TInstance, TData, T?>(propertyExpression, selector);
+                var propertySelector = new HasValueTypeSagaQueryPropertySelector<TData, T>(selector);
+                var queryFactory = new PropertyExpressionSagaQueryFactory<TInstance, TData, T?>(propertyExpression, propertySelector);
 
                 return new QuerySagaFilter<TInstance, TData>(repository, policy, queryFactory, sagaPipe);
             };
@@ -112,7 +117,8 @@
 
             _sagaFilterFactory = (repository, policy, sagaPipe) =>
             {
-                var queryFactory = new PropertyExpressionSagaQueryFactory<TInstance, TData, T>(propertyExpression, selector);
+                var propertySelector = new SagaQueryPropertySelector<TData, T>(selector);
+                var queryFactory = new PropertyExpressionSagaQueryFactory<TInstance, TData, T>(propertyExpression, propertySelector);
 
                 return new QuerySagaFilter<TInstance, TData>(repository, policy, queryFactory, sagaPipe);
             };

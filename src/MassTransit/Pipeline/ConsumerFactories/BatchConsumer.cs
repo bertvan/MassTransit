@@ -8,32 +8,28 @@
     using System.Threading.Tasks;
     using Context;
     using GreenPipes;
-    using Metadata;
     using Util;
 
 
-    public class BatchConsumer<TConsumer, TMessage> :
+    public class BatchConsumer<TMessage> :
         IConsumer<TMessage>
         where TMessage : class
-        where TConsumer : class
     {
         readonly TaskCompletionSource<DateTime> _completed;
-        readonly IConsumerFactory<TConsumer> _consumerFactory;
-        readonly IPipe<ConsumerConsumeContext<TConsumer, Batch<TMessage>>> _consumerPipe;
+        readonly IPipe<ConsumeContext<Batch<TMessage>>> _consumerPipe;
+        readonly ChannelExecutor _dispatcher;
+        readonly ChannelExecutor _executor;
         readonly DateTime _firstMessage;
         readonly int _messageLimit;
         readonly SortedDictionary<Guid, ConsumeContext<TMessage>> _messages;
-        readonly ChannelExecutor _executor;
-        readonly ChannelExecutor _dispatcher;
         readonly Timer _timer;
         DateTime _lastMessage;
 
         public BatchConsumer(int messageLimit, TimeSpan timeLimit, ChannelExecutor executor, ChannelExecutor dispatcher,
-            IConsumerFactory<TConsumer> consumerFactory, IPipe<ConsumerConsumeContext<TConsumer, Batch<TMessage>>> consumerPipe)
+            IPipe<ConsumeContext<Batch<TMessage>>> consumerPipe)
         {
             _messageLimit = messageLimit;
             _executor = executor;
-            _consumerFactory = consumerFactory;
             _consumerPipe = consumerPipe;
             _dispatcher = dispatcher;
             _messages = new SortedDictionary<Guid, ConsumeContext<TMessage>>();
@@ -77,7 +73,7 @@
                 if (_messages.Count <= 0)
                     return TaskUtil.Completed;
 
-                List<ConsumeContext<TMessage>> messages = _messages.Values.ToList();
+                List<ConsumeContext<TMessage>> messages = GetMessageBatchInOrder();
 
                 return _dispatcher.Push(() => Deliver(messages[0], messages, BatchCompletionMode.Time));
             }));
@@ -94,7 +90,9 @@
             {
                 IsCompleted = true;
 
-                return _dispatcher.Push(() => Deliver(context, _messages.Values.ToList(), BatchCompletionMode.Size));
+                List<ConsumeContext<TMessage>> messageList = GetMessageBatchInOrder();
+
+                return _dispatcher.Push(() => Deliver(context, messageList, BatchCompletionMode.Size));
             }
 
             return TaskUtil.Completed;
@@ -112,7 +110,7 @@
         {
             IsCompleted = true;
 
-            List<ConsumeContext<TMessage>> consumeContexts = _messages.Values.ToList();
+            List<ConsumeContext<TMessage>> consumeContexts = GetMessageBatchInOrder();
             return consumeContexts.Count == 0
                 ? TaskUtil.Completed
                 : _dispatcher.Push(() => Deliver(consumeContexts.Last(), consumeContexts, BatchCompletionMode.Forced));
@@ -124,11 +122,11 @@
 
             Batch<TMessage> batch = new Batch(_firstMessage, _lastMessage, batchCompletionMode, messages);
 
+            ConsumeContext<Batch<TMessage>> batchConsumeContext = new BatchConsumeContext<TMessage>(context, batch);
+
             try
             {
-                var proxy = new MessageConsumeContext<Batch<TMessage>>(context, batch);
-
-                await _consumerFactory.Send(proxy, _consumerPipe).ConfigureAwait(false);
+                await _consumerPipe.Send(batchConsumeContext).ConfigureAwait(false);
 
                 _completed.TrySetResult(DateTime.UtcNow);
             }
@@ -138,8 +136,21 @@
             }
             catch (Exception exception)
             {
+                if (batchConsumeContext.TryGetPayload(out RetryContext<ConsumeContext<Batch<TMessage>>> retryContext))
+                {
+                    for (var i = 0; i < messages.Count; i++)
+                        messages[i].GetOrAddPayload(() => retryContext);
+                }
+
                 _completed.TrySetException(exception);
             }
+        }
+
+        List<ConsumeContext<TMessage>> GetMessageBatchInOrder()
+        {
+            return _messages.Values
+                .OrderBy(x => x.SentTime ?? x.MessageId?.ToNewId().Timestamp ?? default)
+                .ToList();
         }
 
 

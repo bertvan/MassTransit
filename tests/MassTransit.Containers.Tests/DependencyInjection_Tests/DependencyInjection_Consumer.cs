@@ -1,6 +1,7 @@
 namespace MassTransit.Containers.Tests.DependencyInjection_Tests
 {
     using System;
+    using System.Threading.Tasks;
     using Common_Tests;
     using GreenPipes;
     using Microsoft.Extensions.DependencyInjection;
@@ -25,6 +26,52 @@ namespace MassTransit.Containers.Tests.DependencyInjection_Tests
 
             collection.AddScoped<ISimpleConsumerDependency, SimpleConsumerDependency>();
             collection.AddScoped<AnotherMessageConsumer, AnotherMessageConsumerImpl>();
+
+            _provider = collection.BuildServiceProvider(true);
+        }
+
+        protected override IBusRegistrationContext Registration => _provider.GetRequiredService<IBusRegistrationContext>();
+    }
+
+
+    [TestFixture]
+    public class DependencyInjection_Consumer_Retry :
+        Common_Consumer_Retry
+    {
+        readonly IServiceProvider _provider;
+
+        public DependencyInjection_Consumer_Retry()
+        {
+            var collection = new ServiceCollection();
+            collection.AddMassTransit(ConfigureRegistration);
+
+            _provider = collection.BuildServiceProvider(true);
+        }
+
+        protected override void ConfigureInMemoryReceiveEndpoint(IInMemoryReceiveEndpointConfigurator configurator)
+        {
+            configurator.UseMessageRetry(r => r.Immediate(5));
+            configurator.UseMessageScope(_provider);
+            configurator.UseInMemoryOutbox();
+
+            base.ConfigureInMemoryReceiveEndpoint(configurator);
+        }
+
+        protected override IBusRegistrationContext Registration => _provider.GetRequiredService<IBusRegistrationContext>();
+    }
+
+
+    [TestFixture]
+    public class DependencyInjection_Consumer_ConfigureEndpoint :
+        Common_Consumer_ConfigureEndpoint
+    {
+        readonly IServiceProvider _provider;
+
+        public DependencyInjection_Consumer_ConfigureEndpoint()
+        {
+            var collection = new ServiceCollection();
+            collection.AddMassTransit(ConfigureRegistration);
+            collection.AddTransient<IConfigureReceiveEndpoint, DoNotPublishFaults>();
 
             _provider = collection.BuildServiceProvider(true);
         }
@@ -87,7 +134,6 @@ namespace MassTransit.Containers.Tests.DependencyInjection_Tests
         {
             var services = new ServiceCollection();
             services.AddScoped(_ => new MyId(Guid.NewGuid()));
-            services.AddScoped(typeof(ScopedFilter<>));
             services.AddSingleton(TaskCompletionSource);
             services.AddMassTransit(ConfigureRegistration);
             _provider = services.BuildServiceProvider(true);
@@ -133,6 +179,24 @@ namespace MassTransit.Containers.Tests.DependencyInjection_Tests
 
 
     [TestFixture]
+    public class DependencyInjection_Consumer_Connect :
+        Common_Consumer_Connect
+    {
+        readonly IServiceProvider _provider;
+
+        public DependencyInjection_Consumer_Connect()
+        {
+            _provider = new ServiceCollection()
+                .AddSingleton(MessageCompletion)
+                .AddMassTransit(ConfigureRegistration)
+                .BuildServiceProvider();
+        }
+
+        protected override IReceiveEndpointConnector Connector => _provider.GetRequiredService<IReceiveEndpointConnector>();
+    }
+
+
+    [TestFixture]
     public class DependencyInjection_Consumer_FilterOrder :
         Common_Consumer_FilterOrder
     {
@@ -166,6 +230,57 @@ namespace MassTransit.Containers.Tests.DependencyInjection_Tests
         protected override IFilter<ConsumeContext<EasyMessage>> CreateMessageFilter()
         {
             return _provider.GetRequiredService<IFilter<ConsumeContext<EasyMessage>>>();
+        }
+    }
+
+
+    [TestFixture]
+    public class DependencyInjection_Consumer_ScopedFilterOrder :
+        Common_Consumer_ScopedFilterOrder<IServiceProvider>
+    {
+        readonly IServiceProvider _provider;
+
+        public DependencyInjection_Consumer_ScopedFilterOrder()
+        {
+            _provider = new ServiceCollection()
+                .AddSingleton(MessageCompletion)
+                .AddMassTransit(ConfigureRegistration)
+                .BuildServiceProvider();
+        }
+
+        protected override void ConfigureInMemoryReceiveEndpoint(IInMemoryReceiveEndpointConfigurator configurator)
+        {
+            base.ConfigureInMemoryReceiveEndpoint(configurator);
+            DependencyInjectionFilterExtensions.UseConsumeFilter(configurator, typeof(MessageFilter<>), Registration);
+        }
+
+        protected override IBusRegistrationContext Registration => _provider.GetRequiredService<IBusRegistrationContext>();
+
+
+        class MessageFilter<TMessage> :
+            IFilter<ConsumeContext<TMessage>>
+            where TMessage : class
+        {
+            readonly TaskCompletionSource<ConsumeContext<TMessage>> _taskCompletionSource;
+
+            public MessageFilter(TaskCompletionSource<ConsumeContext<TMessage>> taskCompletionSource)
+            {
+                _taskCompletionSource = taskCompletionSource;
+            }
+
+            public Task Send(ConsumeContext<TMessage> context, IPipe<ConsumeContext<TMessage>> next)
+            {
+                if (context.TryGetPayload(out IServiceProvider _))
+                    _taskCompletionSource.TrySetResult(context);
+                else
+                    _taskCompletionSource.TrySetException(new PayloadException("Service Provider not found"));
+
+                return next.Send(context);
+            }
+
+            public void Probe(ProbeContext context)
+            {
+            }
         }
     }
 }

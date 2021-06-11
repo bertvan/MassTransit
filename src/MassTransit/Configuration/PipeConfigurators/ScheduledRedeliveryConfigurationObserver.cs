@@ -10,11 +10,13 @@
         ConfigurationObserver,
         IMessageConfigurationObserver
     {
+        readonly IConsumePipeConfigurator _configurator;
         readonly Action<IRetryConfigurator> _configure;
 
         public ScheduledRedeliveryConfigurationObserver(IConsumePipeConfigurator configurator, Action<IRetryConfigurator> configure)
             : base(configurator)
         {
+            _configurator = configurator;
             _configure = configure;
 
             Connect(this);
@@ -33,6 +35,11 @@
             _configure?.Invoke(retrySpecification);
 
             configurator.AddPipeSpecification(retrySpecification);
+        }
+
+        public override void BatchConsumerConfigured<TConsumer, TMessage>(IConsumerMessageConfigurator<TConsumer, Batch<TMessage>> configurator)
+        {
+            MessageConfigured<TMessage>(_configurator);
         }
 
         public override void ActivityConfigured<TActivity, TArguments>(IExecuteActivityConfigurator<TActivity, TArguments> configurator, Uri compensateAddress)
@@ -71,7 +78,7 @@
         protected virtual void AddRedeliveryPipeSpecification<TMessage>(IConsumePipeConfigurator configurator)
             where TMessage : class
         {
-            var redeliverySpecification = new ScheduleMessageRedeliveryPipeSpecification<TMessage>();
+            var redeliverySpecification = new ScheduledRedeliveryPipeSpecification<TMessage>();
 
             configurator.AddPipeSpecification(redeliverySpecification);
         }

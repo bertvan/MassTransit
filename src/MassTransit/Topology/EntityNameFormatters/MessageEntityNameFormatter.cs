@@ -1,14 +1,22 @@
 namespace MassTransit.Topology.EntityNameFormatters
 {
+    using System;
+    using System.Reflection;
+    using Internals.Extensions;
+
+
     public class MessageEntityNameFormatter<TMessage> :
         IMessageEntityNameFormatter<TMessage>
         where TMessage : class
     {
         readonly IEntityNameFormatter _entityNameFormatter;
+        string _entityName;
 
         public MessageEntityNameFormatter(IEntityNameFormatter entityNameFormatter)
         {
             _entityNameFormatter = entityNameFormatter;
+
+            InitializeEntityNameFromAttributeIfSpecified();
         }
 
         /// <summary>
@@ -17,7 +25,20 @@ namespace MassTransit.Topology.EntityNameFormatters
         /// <returns></returns>
         public string FormatEntityName()
         {
-            return _entityNameFormatter.FormatEntityName<TMessage>();
+            return _entityName ??= _entityNameFormatter.FormatEntityName<TMessage>();
+        }
+
+        void InitializeEntityNameFromAttributeIfSpecified()
+        {
+            var entityNameAttribute = typeof(TMessage).GetCustomAttribute<EntityNameAttribute>();
+            if (entityNameAttribute != null)
+                _entityName = entityNameAttribute.EntityName;
+            else if (typeof(TMessage).ClosesType(typeof(Fault<>), out Type[] messageTypes))
+            {
+                var faultEntityNameAttribute = messageTypes[0].GetCustomAttribute<FaultEntityNameAttribute>();
+                if (faultEntityNameAttribute != null)
+                    _entityName = faultEntityNameAttribute.EntityName;
+            }
         }
     }
 }

@@ -5,6 +5,7 @@ namespace MassTransit.MultiBus
     using System.Threading.Tasks;
     using EndpointConfigurators;
     using GreenPipes;
+    using Pipeline;
     using Topology;
 
 
@@ -106,6 +107,12 @@ namespace MassTransit.MultiBus
             return _busControl.ConnectConsumePipe(pipe);
         }
 
+        public ConnectHandle ConnectConsumePipe<T>(IPipe<ConsumeContext<T>> pipe, ConnectPipeOptions options)
+            where T : class
+        {
+            return _busControl.ConnectConsumePipe(pipe, options);
+        }
+
         public ConnectHandle ConnectRequestPipe<T>(Guid requestId, IPipe<ConsumeContext<T>> pipe)
             where T : class
         {
@@ -166,6 +173,11 @@ namespace MassTransit.MultiBus
         public Task StopAsync(CancellationToken cancellationToken = default)
         {
             return _busControl.StopAsync(cancellationToken);
+        }
+
+        public HealthResult CheckHealth()
+        {
+            return _busControl.CheckHealth();
         }
     }
 }

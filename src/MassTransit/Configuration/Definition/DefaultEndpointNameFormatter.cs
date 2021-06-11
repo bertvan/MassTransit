@@ -16,8 +16,34 @@ namespace MassTransit.Definition
     public class DefaultEndpointNameFormatter :
         IEndpointNameFormatter
     {
+        static readonly char[] _removeChars = {'.', '+'};
+
+        readonly bool _includeNamespace;
+        readonly string _prefix;
+
+        /// <summary>
+        /// Default endpoint formatter, which does not have a separator between words
+        /// </summary>
+        /// <param name="includeNamespace">If true, the namespace is included in the name</param>
+        public DefaultEndpointNameFormatter(bool includeNamespace)
+        {
+            _includeNamespace = includeNamespace;
+        }
+
+        /// <summary>
+        /// Default endpoint formatter, which does not have a separator between words
+        /// </summary>
+        /// <param name="prefix">Prefix to start the name, should match the casing of the formatter (such as Dev or PreProd)</param>
+        /// <param name="includeNamespace">If true, the namespace is included in the name</param>
+        public DefaultEndpointNameFormatter(string prefix, bool includeNamespace)
+        {
+            _prefix = prefix;
+            _includeNamespace = includeNamespace;
+        }
+
         protected DefaultEndpointNameFormatter()
         {
+            _includeNamespace = false;
         }
 
         public static IEndpointNameFormatter Instance { get; } = new DefaultEndpointNameFormatter();
@@ -55,7 +81,7 @@ namespace MassTransit.Definition
         public string Consumer<T>()
             where T : class, IConsumer
         {
-            return GetConsumerName(typeof(T));
+            return GetConsumerName<T>();
         }
 
         public string Message<T>()
@@ -67,14 +93,14 @@ namespace MassTransit.Definition
         public string Saga<T>()
             where T : class, ISaga
         {
-            return GetSagaName(typeof(T).Name);
+            return GetSagaName<T>();
         }
 
         public string ExecuteActivity<T, TArguments>()
             where T : class, IExecuteActivity<TArguments>
             where TArguments : class
         {
-            var activityName = GetActivityName(typeof(T).Name);
+            var activityName = GetActivityName<T>();
 
             return $"{activityName}_execute";
         }
@@ -83,7 +109,7 @@ namespace MassTransit.Definition
             where T : class, ICompensateActivity<TLog>
             where TLog : class
         {
-            var activityName = GetActivityName(typeof(T).Name);
+            var activityName = GetActivityName<T>();
 
             return $"{activityName}_compensate";
         }
@@ -93,13 +119,14 @@ namespace MassTransit.Definition
             return name;
         }
 
-        string GetConsumerName(Type type)
+        string GetConsumerName<T>()
         {
-            if (type.IsGenericType)
-                return SanitizeName(type.GetGenericArguments()[0].Name);
+            if (typeof(T).IsGenericType)
+                return SanitizeName(FormatName(typeof(T).GetGenericArguments()[0]));
 
             const string consumer = "Consumer";
-            var consumerName = type.Name;
+
+            var consumerName = FormatName(typeof(T));
 
             if (consumerName.EndsWith(consumer, StringComparison.InvariantCultureIgnoreCase))
                 consumerName = consumerName.Substring(0, consumerName.Length - consumer.Length);
@@ -110,33 +137,44 @@ namespace MassTransit.Definition
         string GetMessageName(Type type)
         {
             if (type.IsGenericType)
-                return SanitizeName(type.GetGenericArguments()[0].Name);
+                return SanitizeName(FormatName(type.GetGenericArguments()[0]));
 
             var messageName = type.Name;
 
             return SanitizeName(messageName);
         }
 
-        string GetSagaName(string typeName)
+        string GetSagaName<T>()
         {
             const string saga = "Saga";
 
-            var sagaName = typeName;
+            var sagaName = FormatName(typeof(T));
+
             if (sagaName.EndsWith(saga, StringComparison.InvariantCultureIgnoreCase))
                 sagaName = sagaName.Substring(0, sagaName.Length - saga.Length);
 
             return SanitizeName(sagaName);
         }
 
-        string GetActivityName(string typeName)
+        string GetActivityName<T>()
         {
             const string activity = "Activity";
 
-            var activityName = typeName;
+            var activityName = FormatName(typeof(T));
+
             if (activityName.EndsWith(activity, StringComparison.InvariantCultureIgnoreCase))
                 activityName = activityName.Substring(0, activityName.Length - activity.Length);
 
             return SanitizeName(activityName);
+        }
+
+        string FormatName(Type type)
+        {
+            var name = _includeNamespace
+                ? string.Join("", TypeMetadataCache.GetShortName(type).Split(_removeChars))
+                : type.Name;
+
+            return string.IsNullOrWhiteSpace(_prefix) ? name : _prefix + name;
         }
     }
 }

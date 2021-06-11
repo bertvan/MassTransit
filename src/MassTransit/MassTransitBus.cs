@@ -25,6 +25,8 @@ namespace MassTransit
         readonly IPublishEndpoint _publishEndpoint;
         readonly IReceiveEndpoint _receiveEndpoint;
         Handle _busHandle;
+        BusState _busState;
+        string _healthMessage = "not started";
 
         public MassTransitBus(IHost host, IBusObserver busObservable, IReceiveEndpointConfiguration endpointConfiguration)
         {
@@ -36,6 +38,9 @@ namespace MassTransit
 
             Topology = host.Topology;
 
+            if (LogContext.Current == null)
+                throw new ConfigurationException("The LogContext was not set.");
+
             _logContext = LogContext.Current;
 
             _publishEndpoint = new PublishEndpoint(_receiveEndpoint);
@@ -43,7 +48,21 @@ namespace MassTransit
 
         ConnectHandle IConsumePipeConnector.ConnectConsumePipe<T>(IPipe<ConsumeContext<T>> pipe)
         {
+            LogContext.SetCurrentIfNull(_logContext);
+
             var handle = _consumePipe.ConnectConsumePipe(pipe);
+
+            if (_busHandle != null && !_receiveEndpoint.Started.IsCompletedSuccessfully())
+                TaskUtil.Await(_receiveEndpoint.Started);
+
+            return handle;
+        }
+
+        ConnectHandle IConsumePipeConnector.ConnectConsumePipe<T>(IPipe<ConsumeContext<T>> pipe, ConnectPipeOptions options)
+        {
+            LogContext.SetCurrentIfNull(_logContext);
+
+            var handle = _consumePipe.ConnectConsumePipe(pipe, options);
 
             if (_busHandle != null && !_receiveEndpoint.Started.IsCompletedSuccessfully())
                 TaskUtil.Await(_receiveEndpoint.Started);
@@ -53,6 +72,8 @@ namespace MassTransit
 
         ConnectHandle IRequestPipeConnector.ConnectRequestPipe<T>(Guid requestId, IPipe<ConsumeContext<T>> pipe)
         {
+            LogContext.SetCurrentIfNull(_logContext);
+
             var handle = _consumePipe.ConnectRequestPipe(requestId, pipe);
 
             if (_busHandle != null && !_receiveEndpoint.Started.IsCompletedSuccessfully())
@@ -63,51 +84,71 @@ namespace MassTransit
 
         Task IPublishEndpoint.Publish<T>(T message, CancellationToken cancellationToken)
         {
+            LogContext.SetCurrentIfNull(_logContext);
+
             return _publishEndpoint.Publish(message, cancellationToken);
         }
 
         Task IPublishEndpoint.Publish<T>(T message, IPipe<PublishContext<T>> publishPipe, CancellationToken cancellationToken)
         {
+            LogContext.SetCurrentIfNull(_logContext);
+
             return _publishEndpoint.Publish(message, publishPipe, cancellationToken);
         }
 
         Task IPublishEndpoint.Publish<T>(T message, IPipe<PublishContext> publishPipe, CancellationToken cancellationToken)
         {
+            LogContext.SetCurrentIfNull(_logContext);
+
             return _publishEndpoint.Publish(message, publishPipe, cancellationToken);
         }
 
         Task IPublishEndpoint.Publish(object message, CancellationToken cancellationToken)
         {
+            LogContext.SetCurrentIfNull(_logContext);
+
             return _publishEndpoint.Publish(message, cancellationToken);
         }
 
         Task IPublishEndpoint.Publish(object message, IPipe<PublishContext> publishPipe, CancellationToken cancellationToken)
         {
+            LogContext.SetCurrentIfNull(_logContext);
+
             return _publishEndpoint.Publish(message, publishPipe, cancellationToken);
         }
 
         Task IPublishEndpoint.Publish(object message, Type messageType, CancellationToken cancellationToken)
         {
+            LogContext.SetCurrentIfNull(_logContext);
+
             return _publishEndpoint.Publish(message, messageType, cancellationToken);
         }
 
         Task IPublishEndpoint.Publish(object message, Type messageType, IPipe<PublishContext> publishPipe, CancellationToken cancellationToken)
         {
+            LogContext.SetCurrentIfNull(_logContext);
+
             return _publishEndpoint.Publish(message, messageType, publishPipe, cancellationToken);
         }
 
         Task IPublishEndpoint.Publish<T>(object values, CancellationToken cancellationToken)
         {
+            LogContext.SetCurrentIfNull(_logContext);
+
             return _publishEndpoint.Publish<T>(values, cancellationToken);
         }
 
         Task IPublishEndpoint.Publish<T>(object values, IPipe<PublishContext<T>> publishPipe, CancellationToken cancellationToken)
         {
+            LogContext.SetCurrentIfNull(_logContext);
+
             return _publishEndpoint.Publish(values, publishPipe, cancellationToken);
         }
 
         Task IPublishEndpoint.Publish<T>(object values, IPipe<PublishContext> publishPipe, CancellationToken cancellationToken)
         {
+            LogContext.SetCurrentIfNull(_logContext);
+
             return _publishEndpoint.Publish<T>(values, publishPipe, cancellationToken);
         }
 
@@ -145,9 +186,9 @@ namespace MassTransit
                     cancellationToken = tokenSource.Token;
                 }
 
-                var hostHandle = await _host.Start(cancellationToken).ConfigureAwait(false);
+                var hostHandle = _host.Start(cancellationToken);
 
-                busHandle = new Handle(hostHandle, this, _busObservable, _logContext);
+                busHandle = new Handle(_host, hostHandle, this, _busObservable, _logContext);
 
                 try
                 {
@@ -171,6 +212,11 @@ namespace MassTransit
 
                 _busHandle = busHandle;
 
+                _busState = BusState.Started;
+                _healthMessage = "";
+
+                LogContext.Info?.Log("Bus started: {HostAddress}", _host.Address);
+
                 return _busHandle;
             }
             catch (Exception ex)
@@ -179,7 +225,7 @@ namespace MassTransit
                 {
                     if (busHandle != null)
                     {
-                        LogContext.Debug?.Log("Bus start faulted, stopping host");
+                        LogContext.Debug?.Log(ex, "Bus start faulted, stopping host");
 
                         await busHandle.StopAsync(cancellationToken).ConfigureAwait(false);
                     }
@@ -192,6 +238,9 @@ namespace MassTransit
                     LogContext.Warning?.Log(stopException, "Bus start faulted, and failed to stop host");
                 }
 
+                _busState = BusState.Faulted;
+                _healthMessage = $"start faulted: {ex.Message}";
+
                 await _busObservable.StartFaulted(this, ex).ConfigureAwait(false);
 
                 throw;
@@ -202,57 +251,80 @@ namespace MassTransit
             }
         }
 
-        public Task StopAsync(CancellationToken cancellationToken = new CancellationToken())
+        public async Task StopAsync(CancellationToken cancellationToken = new CancellationToken())
         {
             LogContext.SetCurrentIfNull(_logContext);
 
             if (_busHandle == null)
             {
                 LogContext.Warning?.Log("Failed to stop bus: {Address} ({Reason})", Address, "Not Started");
-                return TaskUtil.Completed;
+                return;
             }
 
-            return _busHandle.StopAsync(cancellationToken);
+            await _busHandle.StopAsync(cancellationToken).ConfigureAwait(false);
+
+            _busHandle = null;
+        }
+
+        public HealthResult CheckHealth()
+        {
+            return _host.CheckHealth(_busState, _healthMessage);
         }
 
         ConnectHandle IConsumeObserverConnector.ConnectConsumeObserver(IConsumeObserver observer)
         {
+            LogContext.SetCurrentIfNull(_logContext);
+
             return _host.ConnectConsumeObserver(observer);
         }
 
         ConnectHandle IConsumeMessageObserverConnector.ConnectConsumeMessageObserver<T>(IConsumeMessageObserver<T> observer)
         {
+            LogContext.SetCurrentIfNull(_logContext);
+
             return _host.ConnectConsumeMessageObserver(observer);
         }
 
         public ConnectHandle ConnectReceiveObserver(IReceiveObserver observer)
         {
+            LogContext.SetCurrentIfNull(_logContext);
+
             return _host.ConnectReceiveObserver(observer);
         }
 
         ConnectHandle IReceiveEndpointObserverConnector.ConnectReceiveEndpointObserver(IReceiveEndpointObserver observer)
         {
+            LogContext.SetCurrentIfNull(_logContext);
+
             return _host.ConnectReceiveEndpointObserver(observer);
         }
 
         public ConnectHandle ConnectPublishObserver(IPublishObserver observer)
         {
+            LogContext.SetCurrentIfNull(_logContext);
+
             return _host.ConnectPublishObserver(observer);
         }
 
         public Task<ISendEndpoint> GetPublishSendEndpoint<T>()
             where T : class
         {
+            LogContext.SetCurrentIfNull(_logContext);
+
             return _receiveEndpoint.GetPublishSendEndpoint<T>();
         }
 
         public ConnectHandle ConnectSendObserver(ISendObserver observer)
         {
+            LogContext.SetCurrentIfNull(_logContext);
+
             return _host.ConnectSendObserver(observer);
         }
 
         ConnectHandle IEndpointConfigurationObserverConnector.ConnectEndpointConfigurationObserver(IEndpointConfigurationObserver observer)
         {
+            LogContext.SetCurrentIfNull(_logContext);
+
             return _host.ConnectEndpointConfigurationObserver(observer);
         }
 
@@ -279,21 +351,25 @@ namespace MassTransit
         class Handle :
             BusHandle
         {
-            readonly IBus _bus;
+            readonly MassTransitBus _bus;
             readonly IBusObserver _busObserver;
+            readonly IHost _host;
             readonly HostHandle _hostHandle;
             readonly ILogContext _logContext;
             bool _stopped;
 
-            public Handle(HostHandle hostHandle, IBus bus, IBusObserver busObserver, ILogContext logContext)
+            public Handle(IHost host, HostHandle hostHandle, MassTransitBus bus, IBusObserver busObserver, ILogContext logContext)
             {
+                _host = host;
                 _bus = bus;
                 _busObserver = busObserver;
                 _logContext = logContext;
                 _hostHandle = hostHandle;
+
+                Ready = ReadyOrNot(hostHandle.Ready);
             }
 
-            public Task<BusReady> Ready => ReadyOrNot(_hostHandle.Ready);
+            public Task<BusReady> Ready { get; }
 
             public async Task StopAsync(CancellationToken cancellationToken)
             {
@@ -306,8 +382,6 @@ namespace MassTransit
 
                 try
                 {
-                    LogContext.Debug?.Log("Stopping host");
-
                     await _hostHandle.Stop(cancellationToken).ConfigureAwait(false);
 
                     await _busObserver.PostStop(_bus).ConfigureAwait(false);
@@ -319,12 +393,20 @@ namespace MassTransit
                 {
                     await _busObserver.StopFaulted(_bus, exception).ConfigureAwait(false);
 
-                    LogContext.Warning?.Log(exception, "Bus stop faulted");
+                    LogContext.Warning?.Log(exception, "Bus stop faulted: {HostAddress}", _host.Address);
+
+                    _bus._busState = BusState.Faulted;
+                    _bus._healthMessage = $"stop faulted: {exception.Message}";
 
                     throw;
                 }
 
+                LogContext.Info?.Log("Bus stopped: {HostAddress}", _host.Address);
+
                 _stopped = true;
+
+                _bus._busState = BusState.Stopped;
+                _bus._healthMessage = "stopped";
             }
 
             async Task<BusReady> ReadyOrNot(Task<HostReady> ready)

@@ -6,6 +6,7 @@ namespace MassTransit.AutofacIntegration.Registration
     using Clients;
     using Courier;
     using Definition;
+    using Futures;
     using MassTransit.Registration;
     using Mediator;
     using Saga;
@@ -126,6 +127,22 @@ namespace MassTransit.AutofacIntegration.Registration
                 _builder.RegisterInstance(settings);
         }
 
+        public void RegisterFuture<TFuture>()
+            where TFuture : MassTransitStateMachine<FutureState>
+        {
+            _builder.RegisterType<TFuture>()
+                .AsSelf()
+                .SingleInstance();
+        }
+
+        public void RegisterFutureDefinition<TDefinition, TFuture>()
+            where TDefinition : class, IFutureDefinition<TFuture>
+            where TFuture : MassTransitStateMachine<FutureState>
+        {
+            _builder.RegisterType<TDefinition>()
+                .As<IFutureDefinition<TFuture>>();
+        }
+
         public void RegisterRequestClient<T>(RequestTimeout timeout = default)
             where T : class
         {
@@ -166,7 +183,7 @@ namespace MassTransit.AutofacIntegration.Registration
         public void Register<T>(Func<IConfigurationServiceProvider, T> factoryMethod)
             where T : class
         {
-            _builder.Register(context => factoryMethod(new AutofacConfigurationServiceProvider(context.Resolve<ILifetimeScope>())));
+            _builder.Register(context => factoryMethod(new AutofacConfigurationServiceProvider(context.Resolve<ILifetimeScope>()))).InstancePerLifetimeScope();
         }
 
         public void RegisterSingleInstance<T>(Func<IConfigurationServiceProvider, T> factoryMethod)
@@ -197,7 +214,7 @@ namespace MassTransit.AutofacIntegration.Registration
         {
             var lifetimeScopeProvider = new SingleLifetimeScopeProvider(context.Resolve<ILifetimeScope>());
 
-            return new AutofacExecuteActivityScopeProvider<TActivity, TArguments>(lifetimeScopeProvider, "message");
+            return new AutofacExecuteActivityScopeProvider<TActivity, TArguments>(lifetimeScopeProvider, ScopeName, ConfigureScope);
         }
 
         ICompensateActivityScopeProvider<TActivity, TLog> CreateCompensateActivityScopeProvider<TActivity, TLog>(IComponentContext context)
@@ -206,7 +223,7 @@ namespace MassTransit.AutofacIntegration.Registration
         {
             var lifetimeScopeProvider = new SingleLifetimeScopeProvider(context.Resolve<ILifetimeScope>());
 
-            return new AutofacCompensateActivityScopeProvider<TActivity, TLog>(lifetimeScopeProvider, "message");
+            return new AutofacCompensateActivityScopeProvider<TActivity, TLog>(lifetimeScopeProvider, ScopeName, ConfigureScope);
         }
 
         protected virtual IClientFactory GetClientFactory(IComponentContext componentContext)

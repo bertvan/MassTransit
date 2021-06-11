@@ -17,10 +17,9 @@ namespace MassTransit.Containers.Tests
         [Test]
         public async Task Should_receive_the_message_batch()
         {
-            Task<ConsumeContext<BatchResult>> finished = ConnectPublishHandler<BatchResult>();
+            Task<ConsumeContext<BatchResult>> finished = await ConnectPublishHandler<BatchResult>();
 
-            await InputQueueSendEndpoint.Send(new BatchItem());
-            await InputQueueSendEndpoint.Send(new BatchItem());
+            await InputQueueSendEndpoint.SendBatch(new[] {new BatchItem(), new BatchItem()});
 
             ConsumeContext<BatchResult> finishedContext = await finished;
 
@@ -55,14 +54,12 @@ namespace MassTransit.Containers.Tests
         [Test]
         public async Task Should_receive_the_message_batch()
         {
-            Task<ConsumeContext<BatchResult>> finished = ConnectPublishHandler<BatchResult>();
+            Task<ConsumeContext<BatchResult>> finished = await ConnectPublishHandler<BatchResult>();
 
-            await InputQueueSendEndpoint.Send(new BatchItem());
-            await InputQueueSendEndpoint.Send(new BatchItem());
-            await InputQueueSendEndpoint.Send(new BatchItem());
-            await InputQueueSendEndpoint.Send(new BatchItem());
-            await InputQueueSendEndpoint.Send(new BatchItem());
-            await InputQueueSendEndpoint.Send(new BatchItem());
+            await InputQueueSendEndpoint.SendBatch(new[]
+            {
+                new BatchItem(), new BatchItem(), new BatchItem(), new BatchItem(), new BatchItem(), new BatchItem()
+            });
 
             ConsumeContext<BatchResult> finishedContext = await finished;
 
@@ -104,14 +101,9 @@ namespace MassTransit.Containers.Tests
         [Test]
         public async Task Should_receive_the_message_batch()
         {
-            Task<ConsumeContext<BatchResult>> finished = ConnectPublishHandler<BatchResult>();
+            Task<ConsumeContext<BatchResult>> finished = await ConnectPublishHandler<BatchResult>();
 
-            await Bus.Publish(new BatchItem());
-            await Bus.Publish(new BatchItem());
-            await Bus.Publish(new BatchItem());
-            await Bus.Publish(new BatchItem());
-            await Bus.Publish(new BatchItem());
-            await Bus.Publish(new BatchItem());
+            await Bus.PublishBatch(new[] {new BatchItem(), new BatchItem(), new BatchItem(), new BatchItem(), new BatchItem(), new BatchItem()});
 
             ConsumeContext<BatchResult> finishedContext = await finished;
 
@@ -164,6 +156,7 @@ namespace MassTransit.Containers.Tests
         protected override void ConfigureConsumer(IReceiveEndpointConfigurator endpointConfigurator,
             IConsumerConfigurator<TestBatchConsumer> consumerConfigurator)
         {
+            endpointConfigurator.UseInMemoryOutbox();
             consumerConfigurator.Options<BatchOptions>(o => o.SetMessageLimit(5).SetTimeLimit(2000));
         }
     }

@@ -19,6 +19,12 @@ namespace MassTransit.Transports
         public static readonly LogMessage<string> DisconnectedHost = LogContext.Define<string>(LogLevel.Debug,
             "Disconnected: {Host}");
 
+        public static readonly LogMessage<string> StoppingSendTransport = LogContext.Define<string>(LogLevel.Debug,
+            "Stopping send transport: {Destination}");
+
+        public static readonly LogMessage<Uri> StoppingReceiveTransport = LogContext.Define<Uri>(LogLevel.Debug,
+            "Stopping receive transport: {InputAddress}");
+
         public static readonly LogMessage<Uri> ConnectReceiveEndpoint = LogContext.Define<Uri>(LogLevel.Debug,
             "Connect receive endpoint: {InputAddress}");
 
@@ -45,6 +51,9 @@ namespace MassTransit.Transports
 
         public static readonly LogMessage<string> DeleteQueue = LogContext.Define<string>(LogLevel.Debug,
             "Delete queue: {Queue}");
+
+        public static readonly LogMessage<string, string> DeleteSubscription = LogContext.Define<string, string>(LogLevel.Debug,
+            "Delete subscription: {Queue} {Subscription}");
 
         public static readonly LogMessage<string> DeleteTopic = LogContext.Define<string>(LogLevel.Debug,
             "Delete topic: {Topic}");

@@ -6,6 +6,7 @@
     using Context;
     using Contexts;
     using GreenPipes;
+    using GreenPipes.Agents;
     using Logging;
     using MassTransit.Scheduling;
     using Microsoft.Azure.ServiceBus;
@@ -17,8 +18,11 @@
     /// May be sensible to create a IBatchSendTransport that allows multiple messages to be sent as a single batch (perhaps using Tx support?)
     /// </summary>
     public class ServiceBusSendTransport :
+        Agent,
         ISendTransport
     {
+        static readonly ITransportSetHeaderAdapter<object> _adapter = new DictionaryTransportSetHeaderAdapter(new SimpleHeaderValueConverter());
+
         readonly ServiceBusSendTransportContext _context;
 
         public ServiceBusSendTransport(ServiceBusSendTransportContext context)
@@ -30,12 +34,19 @@
         {
             var sendPipe = new SendPipe<T>(_context, message, pipe, cancellationToken);
 
-            return _context.Supervisor.Send(sendPipe, cancellationToken);
+            return _context.Send(sendPipe, cancellationToken);
         }
 
         public ConnectHandle ConnectSendObserver(ISendObserver observer)
         {
             return _context.ConnectSendObserver(observer);
+        }
+
+        protected override Task StopAgent(StopContext context)
+        {
+            TransportLogMessages.StoppingSendTransport(_context.Address.ToString());
+
+            return base.StopAgent(context);
         }
 
 
@@ -88,11 +99,12 @@
                     if (_context.SendObservers.Count > 0)
                         await _context.SendObservers.PreSend(context).ConfigureAwait(false);
 
-                    var brokeredMessage = CreateBrokeredMessage(context);
+                    var message = CreateMessage(context);
 
-                    await clientContext.Send(brokeredMessage).ConfigureAwait(false);
+                    await clientContext.Send(message).ConfigureAwait(false);
 
                     context.LogSent();
+                    activity.AddSendContextHeadersPostSend(context);
 
                     if (_context.SendObservers.Count > 0)
                         await _context.SendObservers.PostSend(context).ConfigureAwait(false);
@@ -128,9 +140,9 @@
 
                 try
                 {
-                    var brokeredMessage = CreateBrokeredMessage(context);
+                    var message = CreateMessage(context);
 
-                    var sequenceNumber = await clientContext.ScheduleSend(brokeredMessage, enqueueTimeUtc).ConfigureAwait(false);
+                    var sequenceNumber = await clientContext.ScheduleSend(message, enqueueTimeUtc).ConfigureAwait(false);
 
                     context.SetScheduledMessageId(sequenceNumber);
 
@@ -174,36 +186,36 @@
                 return false;
             }
 
-            static Message CreateBrokeredMessage(AzureServiceBusSendContext<T> context)
+            static Message CreateMessage(AzureServiceBusSendContext<T> context)
             {
-                var brokeredMessage = new Message(context.Body) {ContentType = context.ContentType.MediaType};
+                var message = new Message(context.Body) {ContentType = context.ContentType.MediaType};
 
-                brokeredMessage.UserProperties.Set(context.Headers);
+                _adapter.Set(message.UserProperties, context.Headers);
 
                 if (context.TimeToLive.HasValue)
-                    brokeredMessage.TimeToLive = context.TimeToLive > TimeSpan.Zero ? context.TimeToLive.Value : TimeSpan.FromSeconds(1);
+                    message.TimeToLive = context.TimeToLive > TimeSpan.Zero ? context.TimeToLive.Value : TimeSpan.FromSeconds(1);
 
                 if (context.MessageId.HasValue)
-                    brokeredMessage.MessageId = context.MessageId.Value.ToString("N");
+                    message.MessageId = context.MessageId.Value.ToString("N");
 
                 if (context.CorrelationId.HasValue)
-                    brokeredMessage.CorrelationId = context.CorrelationId.Value.ToString("N");
+                    message.CorrelationId = context.CorrelationId.Value.ToString("N");
 
                 if (context.PartitionKey != null)
-                    brokeredMessage.PartitionKey = context.PartitionKey;
+                    message.PartitionKey = context.PartitionKey;
 
                 if (!string.IsNullOrWhiteSpace(context.SessionId))
                 {
-                    brokeredMessage.SessionId = context.SessionId;
+                    message.SessionId = context.SessionId;
 
                     if (context.ReplyToSessionId == null)
-                        brokeredMessage.ReplyToSessionId = context.SessionId;
+                        message.ReplyToSessionId = context.SessionId;
                 }
 
                 if (context.ReplyToSessionId != null)
-                    brokeredMessage.ReplyToSessionId = context.ReplyToSessionId;
+                    message.ReplyToSessionId = context.ReplyToSessionId;
 
-                return brokeredMessage;
+                return message;
             }
 
             static void CopyIncomingIdentifiersIfPresent(AzureServiceBusSendContext<T> context)

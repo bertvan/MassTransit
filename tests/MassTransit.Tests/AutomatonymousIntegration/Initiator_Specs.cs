@@ -17,7 +17,7 @@
         [Test]
         public async Task Should_receive_the_published_message()
         {
-            Task<ConsumeContext<StartupComplete>> messageReceived = ConnectPublishHandler<StartupComplete>();
+            Task<ConsumeContext<StartupComplete>> messageReceived = await ConnectPublishHandler<StartupComplete>();
 
             var message = new Start("Joe");
 
@@ -33,8 +33,7 @@
 
             Assert.AreEqual(received.SourceAddress, InputQueueAddress, "The published message should have the input queue source address");
 
-            Guid? saga =
-                await _repository.ShouldContainSaga(x => x.CorrelationId == message.CorrelationId && Equals(x.CurrentState, _machine.Running), TestTimeout);
+            Guid? saga = await _repository.ShouldContainSagaInState(message.CorrelationId, _machine, x => x.Running, TestTimeout);
 
             Assert.IsTrue(saga.HasValue);
         }

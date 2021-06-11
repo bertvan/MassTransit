@@ -17,7 +17,7 @@
             [Test]
             public async Task Should_handle_the_response()
             {
-                Task<ConsumeContext<MemberRegistered>> handler = ConnectPublishHandler<MemberRegistered>();
+                Task<ConsumeContext<MemberRegistered>> handler = await ConnectPublishHandler<MemberRegistered>();
 
                 var memberNumber = Guid.NewGuid().ToString();
 
@@ -30,8 +30,7 @@
 
                 ConsumeContext<MemberRegistered> registered = await handler;
 
-                Guid? saga = await _repository.ShouldContainSaga(x => x.MemberNumber == memberNumber && Equals(GetCurrentState(x), _machine.Registered),
-                    TestTimeout);
+                Guid? saga = await _repository.ShouldContainSagaInState(x => x.MemberNumber == memberNumber, _machine, x => x.Registered, TestTimeout);
 
                 Assert.IsTrue(saga.HasValue);
 
@@ -47,11 +46,6 @@
 
             InMemorySagaRepository<TestState> _repository;
             TestStateMachine _machine;
-
-            State GetCurrentState(TestState state)
-            {
-                return _machine.GetState(state).Result;
-            }
 
             public Sending_a_request_from_a_state_machine()
             {
@@ -99,7 +93,10 @@
                 {
                     Console.WriteLine("Address validated: {0}", context.Message.CorrelationId);
 
-                    await context.RespondAsync<AddressValidated>(new { });
+                    if (context.IsResponseAccepted<AddressValidated>(false))
+                        await context.RespondAsync<AddressValidated>(new { });
+
+                    throw new InvalidOperationException("Response type not accepted");
                 });
 
                 configurator.Handler<ValidateName>(async context =>

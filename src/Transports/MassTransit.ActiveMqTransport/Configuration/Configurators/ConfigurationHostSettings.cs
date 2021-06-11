@@ -24,7 +24,7 @@ namespace MassTransit.ActiveMqTransport.Configurators
 
             if (!string.IsNullOrEmpty(address.UserInfo))
             {
-                string[] parts = address.UserInfo.Split(':');
+                var parts = address.UserInfo.Split(':');
                 Username = parts[0];
 
                 if (parts.Length >= 2)
@@ -59,9 +59,7 @@ namespace MassTransit.ActiveMqTransport.Configurators
         {
             var factory = new NMSConnectionFactory(BrokerAddress);
 
-            var connection = factory.CreateConnection(Username, Password);
-
-            return connection;
+            return factory.ConnectionFactory.CreateConnection(Username, Password);
         }
 
         Uri FormatHostAddress()

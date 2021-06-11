@@ -12,119 +12,137 @@ namespace MassTransit.Monitoring.Health
 
     public class EndpointHealth :
         IReceiveEndpointObserver,
-        IEndpointConfigurationObserver,
-        IEndpointHealth
+        IEndpointConfigurationObserver
     {
-        readonly ConcurrentDictionary<Uri, EndpointStatus> _endpoints;
+        readonly ConcurrentDictionary<Uri, IEndpointHealth> _endpoints;
 
         public EndpointHealth()
         {
-            _endpoints = new ConcurrentDictionary<Uri, EndpointStatus>();
+            _endpoints = new ConcurrentDictionary<Uri, IEndpointHealth>();
         }
+
+        public bool BusHealthy { get; set; }
 
         public void EndpointConfigured<T>(T configurator)
             where T : IReceiveEndpointConfigurator
         {
-            GetEndpoint(configurator.InputAddress);
-        }
-
-        public HealthResult CheckHealth()
-        {
-            EndpointStatus[] faulted = _endpoints.Values.Where(x => !x.Ready).ToArray();
-            Dictionary<string, object> data = _endpoints.ToDictionary(x => x.Key.ToString(), x => x.Value.GetData());
-
-            HealthResult healthCheckResult;
-            if (faulted.Any())
-            {
-                healthCheckResult = HealthResult.Unhealthy($"Unhealthy Endpoints: {string.Join(",", faulted.Select(x => x.InputAddress.GetLastPart()))}",
-                    faulted.Select(x => x.LastException).FirstOrDefault(e => e != null), data);
-            }
-            else
-                healthCheckResult = HealthResult.Healthy("Endpoints are healthy", data);
-
-            return healthCheckResult;
+            configurator.ConnectReceiveEndpointObserver(this);
+            _endpoints.TryAdd(configurator.InputAddress, BusHealthy ? ConnectingEndpointHealth.Instance : UnHealthEndpointHealth.Instance);
         }
 
         public Task Ready(ReceiveEndpointReady ready)
         {
-            GetEndpoint(ready.InputAddress).OnReady(ready);
+            UpdateEndpoint(ready);
 
             return TaskUtil.Completed;
         }
 
         public Task Stopping(ReceiveEndpointStopping stopping)
         {
-            GetEndpoint(stopping.InputAddress).OnStopping();
+            if (stopping.Removed && _endpoints.TryGetValue(stopping.InputAddress, out var endpoint))
+                _endpoints.TryUpdate(stopping.InputAddress, new RemoveWhenCompletedEndpointHealth(stopping.ReceiveEndpoint), endpoint);
 
             return TaskUtil.Completed;
         }
 
         public Task Completed(ReceiveEndpointCompleted completed)
         {
-            GetEndpoint(completed.InputAddress).OnCompleted(completed);
+            if (_endpoints.TryGetValue(completed.InputAddress, out var endpoint) && endpoint is RemoveWhenCompletedEndpointHealth)
+                _endpoints.TryRemove(completed.InputAddress, out var removed);
 
             return TaskUtil.Completed;
         }
 
         public Task Faulted(ReceiveEndpointFaulted faulted)
         {
-            GetEndpoint(faulted.InputAddress).OnFaulted(faulted);
+            UpdateEndpoint(faulted);
 
             return TaskUtil.Completed;
         }
 
-        EndpointStatus GetEndpoint(Uri inputAddress)
+        public (BusHealthStatus, string, IReadOnlyDictionary<string, EndpointHealthResult>) CheckHealth()
         {
-            return _endpoints.GetOrAdd(inputAddress, address => new EndpointStatus(address));
+            var results = _endpoints.Select(x => new
+            {
+                InputAddress = x.Key,
+                Result = x.Value.CheckHealth()
+            }).ToArray();
+
+            var unhealthy = results.Where(x => x.Result.Status == BusHealthStatus.Unhealthy).ToArray();
+            var degraded = results.Where(x => x.Result.Status == BusHealthStatus.Degraded).ToArray();
+
+            var unhappy = unhealthy.Union(degraded).ToArray();
+
+            var names = unhappy.Select(x => x.InputAddress.GetLastPart()).ToArray();
+
+            Dictionary<string, EndpointHealthResult> data = results.ToDictionary(x => x.InputAddress.ToString(), x => x.Result);
+
+            if (unhealthy.Any() || unhappy.Length == results.Length)
+                return (BusHealthStatus.Unhealthy, $"Unhealthy Endpoints: {string.Join(",", names)}", data);
+
+            if (degraded.Any())
+                return (BusHealthStatus.Degraded, $"Degraded Endpoints: {string.Join(",", names)}", data);
+
+            return (BusHealthStatus.Healthy, "Endpoints are healthy", data);
+        }
+
+        void UpdateEndpoint(ReceiveEndpointEvent endpointEvent)
+        {
+            _endpoints.AddOrUpdate(endpointEvent.InputAddress, endpointEvent.ReceiveEndpoint, (address, _) => endpointEvent.ReceiveEndpoint);
         }
 
 
-        class EndpointStatus
+        class UnHealthEndpointHealth :
+            IEndpointHealth
         {
-            public EndpointStatus(Uri inputAddress)
+            readonly EndpointHealthResult _result;
+
+            UnHealthEndpointHealth()
             {
-                InputAddress = inputAddress;
+                _result = EndpointHealthResult.Unhealthy(null, "not ready", null);
             }
 
-            public Uri InputAddress { get; }
-            public bool Ready { get; set; }
-            public string Message { get; set; } = "not started";
-            public Exception LastException { get; set; }
+            public static IEndpointHealth Instance { get; } = new UnHealthEndpointHealth();
 
-            public void OnReady(ReceiveEndpointReady ready)
+            public EndpointHealthResult CheckHealth()
             {
-                Ready = true;
-                Message = ready.IsStarted ? "ready" : "ready (not started)";
+                return _result;
+            }
+        }
+
+
+        class ConnectingEndpointHealth :
+            IEndpointHealth
+        {
+            readonly EndpointHealthResult _result;
+
+            ConnectingEndpointHealth()
+            {
+                _result = EndpointHealthResult.Healthy(null, "starting");
             }
 
-            public void OnStopping()
+            public static IEndpointHealth Instance { get; } = new ConnectingEndpointHealth();
+
+            public EndpointHealthResult CheckHealth()
             {
-                Ready = true;
-                Message = "stopping";
+                return _result;
+            }
+        }
+
+
+        class RemoveWhenCompletedEndpointHealth :
+            IEndpointHealth
+        {
+            readonly IReceiveEndpoint _receiveEndpoint;
+
+            public RemoveWhenCompletedEndpointHealth(IReceiveEndpoint receiveEndpoint)
+            {
+                _receiveEndpoint = receiveEndpoint;
             }
 
-            public void OnCompleted(ReceiveEndpointCompleted completed)
+            public EndpointHealthResult CheckHealth()
             {
-                Ready = false;
-                Message = $"stopped (delivered {completed.DeliveryCount} messages)";
-            }
-
-            public void OnFaulted(ReceiveEndpointFaulted faulted)
-            {
-                Ready = false;
-                LastException = faulted.Exception;
-                Message = $"faulted ({faulted.Exception.Message})";
-            }
-
-            public object GetData()
-            {
-                if (LastException == null)
-                    return new {Message};
-                return new
-                {
-                    Message,
-                    LastException
-                };
+                return _receiveEndpoint.CheckHealth();
             }
         }
     }

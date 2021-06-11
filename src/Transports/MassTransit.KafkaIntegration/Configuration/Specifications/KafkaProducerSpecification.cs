@@ -2,15 +2,12 @@ namespace MassTransit.KafkaIntegration.Specifications
 {
     using System;
     using System.Collections.Generic;
-    using System.Threading;
-    using System.Threading.Tasks;
     using Configuration;
     using Confluent.Kafka;
-    using Context;
+    using Contexts;
     using GreenPipes;
+    using MassTransit.Pipeline.Observables;
     using MassTransit.Registration;
-    using Pipeline;
-    using Pipeline.Observables;
     using Serializers;
     using Transport;
 
@@ -20,18 +17,20 @@ namespace MassTransit.KafkaIntegration.Specifications
         IKafkaProducerConfigurator<TKey, TValue>
         where TValue : class
     {
+        readonly IKafkaHostConfiguration _hostConfiguration;
         readonly ProducerConfig _producerConfig;
         readonly SendObservable _sendObservers;
-        readonly string _topicName;
         Action<ISendPipeConfigurator> _configureSend;
         IHeadersSerializer _headersSerializer;
         ISerializer<TKey> _keySerializer;
         ISerializer<TValue> _valueSerializer;
 
-        public KafkaProducerSpecification(ProducerConfig producerConfig, string topicName, IHeadersSerializer headersSerializer)
+        public KafkaProducerSpecification(IKafkaHostConfiguration hostConfiguration, ProducerConfig producerConfig, string topicName,
+            IHeadersSerializer headersSerializer)
         {
+            _hostConfiguration = hostConfiguration;
             _producerConfig = producerConfig;
-            _topicName = topicName;
+            TopicName = topicName;
             _headersSerializer = headersSerializer;
             _sendObservers = new SendObservable();
 
@@ -62,7 +61,7 @@ namespace MassTransit.KafkaIntegration.Specifications
 
         public TimeSpan? RetryBackoff
         {
-            set => _producerConfig.RetryBackoffMs = value?.Milliseconds;
+            set => _producerConfig.RetryBackoffMs = value == null ? (int?)null : Convert.ToInt32(value.Value.TotalMilliseconds);
         }
 
         public int? MessageSendMaxRetries
@@ -72,7 +71,7 @@ namespace MassTransit.KafkaIntegration.Specifications
 
         public TimeSpan? Linger
         {
-            set => _producerConfig.LingerMs = value?.Milliseconds;
+            set => _producerConfig.LingerMs = value == null ? (int?)null : Convert.ToInt32(value.Value.TotalMilliseconds);
         }
 
         public int? QueueBufferingMaxKbytes
@@ -97,7 +96,7 @@ namespace MassTransit.KafkaIntegration.Specifications
 
         public TimeSpan? TransactionTimeout
         {
-            set => _producerConfig.TransactionTimeoutMs = value?.Milliseconds;
+            set => _producerConfig.TransactionTimeoutMs = value == null ? (int?)null : Convert.ToInt32(value.Value.TotalMilliseconds);
         }
 
         public string TransactionalId
@@ -112,12 +111,12 @@ namespace MassTransit.KafkaIntegration.Specifications
 
         public TimeSpan? MessageTimeout
         {
-            set => _producerConfig.MessageTimeoutMs = value?.Milliseconds;
+            set => _producerConfig.MessageTimeoutMs = value == null ? (int?)null : Convert.ToInt32(value.Value.TotalMilliseconds);
         }
 
         public TimeSpan? RequestTimeout
         {
-            set => _producerConfig.RequestTimeoutMs = value?.Milliseconds;
+            set => _producerConfig.RequestTimeoutMs = value == null ? (int?)null : Convert.ToInt32(value.Value.TotalMilliseconds);
         }
 
         public string DeliveryReportFields
@@ -150,32 +149,39 @@ namespace MassTransit.KafkaIntegration.Specifications
             _headersSerializer = serializer ?? throw new ArgumentNullException(nameof(serializer));
         }
 
+        public string TopicName { get; }
+
         public IKafkaProducerFactory CreateProducerFactory(IBusInstance busInstance)
         {
-            var logContext = busInstance.HostConfiguration.SendLogContext;
-
+            var producerConfig = _hostConfiguration.GetProducerConfig(_producerConfig);
             var sendConfiguration = new SendPipeConfiguration(busInstance.HostConfiguration.HostTopology.SendTopology);
             _configureSend?.Invoke(sendConfiguration.Configurator);
 
-            ProducerBuilder<TKey, TValue> producerBuilder = new ProducerBuilder<TKey, TValue>(_producerConfig)
-                .SetErrorHandler((c, error) => logContext?.Error?.Log("Consumer error ({code}): {reason} on {topic}", error.Code, error.Reason, _topicName))
-                .SetLogHandler((c, message) => logContext?.Info?.Log(message.Message));
+            ProducerBuilder<TKey, TValue> CreateProducerBuilder()
+            {
+                ProducerBuilder<TKey, TValue> producerBuilder = new ProducerBuilder<TKey, TValue>(producerConfig)
+                    .SetErrorHandler((c, error) =>
+                        busInstance.HostConfiguration.SendLogContext?.Error?.Log("Consumer error ({code}): {reason} on {topic}", error.Code, error.Reason,
+                            TopicName))
+                    .SetLogHandler((c, message) => busInstance.HostConfiguration.SendLogContext?.Debug?.Log(message.Message));
 
-            if (_keySerializer != null)
-                producerBuilder.SetKeySerializer(_keySerializer);
-            if (_valueSerializer != null)
-                producerBuilder.SetValueSerializer(_valueSerializer);
+                if (_keySerializer != null)
+                    producerBuilder.SetKeySerializer(_keySerializer);
+                if (_valueSerializer != null)
+                    producerBuilder.SetValueSerializer(_valueSerializer);
+                return producerBuilder;
+            }
 
-            var context = new KafkaProducerContext(producerBuilder.Build(), busInstance.HostConfiguration, sendConfiguration, _sendObservers,
-                _headersSerializer);
+            var sendPipe = sendConfiguration.CreatePipe();
 
-            return new KafkaProducerFactory<TKey, TValue>(new KafkaTopicAddress(busInstance.HostConfiguration.HostAddress, _topicName), context);
+            return new ProducerContextSupervisor<TKey, TValue>(TopicName, sendPipe, _sendObservers, _hostConfiguration.ClientContextSupervisor,
+                busInstance.HostConfiguration, _headersSerializer, CreateProducerBuilder);
         }
 
         public IEnumerable<ValidationResult> Validate()
         {
-            if (string.IsNullOrEmpty(_producerConfig.BootstrapServers))
-                yield return this.Failure("BootstrapServers", "should not be empty. Please use cfg.Host() to configure it");
+            if (string.IsNullOrEmpty(TopicName))
+                yield return this.Failure("Topic", "should not be empty");
         }
 
         public ConnectHandle ConnectSendObserver(ISendObserver observer)
@@ -186,54 +192,6 @@ namespace MassTransit.KafkaIntegration.Specifications
         public void ConfigureSend(Action<ISendPipeConfigurator> callback)
         {
             _configureSend = callback ?? throw new ArgumentNullException(nameof(callback));
-        }
-
-
-        class KafkaProducerContext :
-            IKafkaProducerContext<TKey, TValue>
-        {
-            readonly IProducer<TKey, TValue> _producer;
-            readonly ISendPipe _sendPipe;
-
-            public KafkaProducerContext(IProducer<TKey, TValue> producer, IHostConfiguration hostConfiguration, ISendPipeConfiguration sendConfiguration,
-                SendObservable sendObservers, IHeadersSerializer headersSerializer)
-            {
-                _producer = producer;
-                _sendPipe = sendConfiguration.CreatePipe();
-                SendObservers = sendObservers;
-                HostAddress = hostConfiguration.HostAddress;
-                LogContext = hostConfiguration.SendLogContext;
-                HeadersSerializer = headersSerializer;
-            }
-
-            public Uri HostAddress { get; }
-            public ILogContext LogContext { get; }
-            public SendObservable SendObservers { get; }
-
-            public IHeadersSerializer HeadersSerializer { get; }
-
-            public Task Produce(TopicPartition partition, Message<TKey, TValue> message, CancellationToken cancellationToken)
-            {
-                return _producer.ProduceAsync(partition, message, cancellationToken);
-            }
-
-            public void Dispose()
-            {
-                var timeout = TimeSpan.FromSeconds(30);
-                _producer.Flush(timeout);
-                _producer.Dispose();
-            }
-
-            public Task Send<T>(SendContext<T> context)
-                where T : class
-            {
-                return _sendPipe.Send(context);
-            }
-
-            public void Probe(ProbeContext context)
-            {
-                _sendPipe.Probe(context);
-            }
         }
     }
 }

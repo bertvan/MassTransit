@@ -1,7 +1,6 @@
 namespace MassTransit.ActiveMqTransport.Pipeline
 {
     using System;
-    using System.Linq;
     using System.Threading.Tasks;
     using Apache.NMS;
     using Context;
@@ -19,7 +18,7 @@ namespace MassTransit.ActiveMqTransport.Pipeline
     /// Receives messages from ActiveMQ, pushing them to the InboundPipe of the service endpoint.
     /// </summary>
     public sealed class ActiveMqConsumer :
-        Supervisor,
+        Agent,
         DeliveryMetrics
     {
         readonly ActiveMqReceiveEndpointContext _context;
@@ -65,12 +64,6 @@ namespace MassTransit.ActiveMqTransport.Pipeline
             {
                 LogContext.Current = _context.LogContext;
 
-                if (IsStopping)
-                {
-                    await WaitAndAbandonMessage().ConfigureAwait(false);
-                    return;
-                }
-
                 var context = new ActiveMqReceiveContext(message, _context, _receiveSettings, _session, _session.ConnectionContext);
 
                 try
@@ -91,40 +84,20 @@ namespace MassTransit.ActiveMqTransport.Pipeline
         Task HandleDeliveryComplete()
         {
             if (IsStopping)
-            {
-                LogContext.Debug?.Log("Consumer shutdown completed: {InputAddress}", _context.InputAddress);
-
                 _deliveryComplete.TrySetResult(true);
-            }
 
             return TaskUtil.Completed;
         }
 
-        async Task WaitAndAbandonMessage()
+        protected override async Task StopAgent(StopContext context)
         {
-            try
-            {
-                await _deliveryComplete.Task.ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                LogContext.Error?.Log(exception, "DeliveryComplete faulted during shutdown: {InputAddress}", _context.InputAddress);
-            }
-        }
-
-        protected override async Task StopSupervisor(StopSupervisorContext context)
-        {
-            LogContext.Debug?.Log("Stopping consumer: {InputAddress}", _context.InputAddress);
-
             SetCompleted(ActiveAndActualAgentsCompleted(context));
 
             await Completed.ConfigureAwait(false);
         }
 
-        async Task ActiveAndActualAgentsCompleted(StopSupervisorContext context)
+        async Task ActiveAndActualAgentsCompleted(StopContext context)
         {
-            await Task.WhenAll(context.Agents.Select(x => Completed)).OrCanceled(context.CancellationToken).ConfigureAwait(false);
-
             if (_dispatcher.ActiveDispatchCount > 0)
             {
                 try

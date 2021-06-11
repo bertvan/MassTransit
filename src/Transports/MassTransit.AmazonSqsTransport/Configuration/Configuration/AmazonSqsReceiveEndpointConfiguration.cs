@@ -3,8 +3,9 @@
     using System;
     using System.Collections.Generic;
     using Builders;
+    using Context;
+    using Contexts;
     using GreenPipes;
-    using GreenPipes.Agents;
     using GreenPipes.Builders;
     using GreenPipes.Configurators;
     using MassTransit.Configuration;
@@ -12,7 +13,6 @@
     using Pipeline;
     using Topology;
     using Topology.Settings;
-    using Transport;
     using Transports;
     using Util;
 
@@ -47,46 +47,36 @@
         public ReceiveSettings Settings => _settings;
         public override Uri HostAddress => _hostConfiguration.HostAddress;
         public override Uri InputAddress => _inputAddress.Value;
+
+        public override ReceiveEndpointContext CreateReceiveEndpointContext()
+        {
+            return CreateSqsReceiveEndpointContext();
+        }
+
         IAmazonSqsTopologyConfiguration IAmazonSqsEndpointConfiguration.Topology => _endpointConfiguration.Topology;
 
         public void Build(IHost host)
         {
-            var builder = new AmazonSqsReceiveEndpointBuilder(_hostConfiguration, this);
+            var context = CreateSqsReceiveEndpointContext();
 
-            ApplySpecifications(builder);
+            _clientConfigurator.UseFilter(new ConfigureTopologyFilter<ReceiveSettings>(_settings, context.BrokerTopology));
 
-            var receiveEndpointContext = builder.CreateReceiveEndpointContext();
-
-            _clientConfigurator.UseFilter(new ConfigureTopologyFilter<ReceiveSettings>(_settings, receiveEndpointContext.BrokerTopology));
-
-            IAgent consumerAgent;
             if (_hostConfiguration.DeployTopologyOnly)
-            {
-                var transportReadyFilter = new TransportReadyFilter<ClientContext>(receiveEndpointContext);
-                _clientConfigurator.UseFilter(transportReadyFilter);
-
-                consumerAgent = transportReadyFilter;
-            }
+                _clientConfigurator.UseFilter(new TransportReadyFilter<ClientContext>(context));
             else
             {
                 if (_settings.PurgeOnStartup)
                     _clientConfigurator.UseFilter(new PurgeOnStartupFilter(_settings.EntityName));
 
-                var consumerFilter = new AmazonSqsConsumerFilter(receiveEndpointContext);
-
-                _clientConfigurator.UseFilter(consumerFilter);
-
-                consumerAgent = consumerFilter;
+                _clientConfigurator.UseFilter(new AmazonSqsConsumerFilter(context));
             }
 
-            IFilter<ConnectionContext> clientFilter = new ReceiveClientFilter(_clientConfigurator.Build());
+            IPipe<ClientContext> clientPipe = _clientConfigurator.Build();
 
-            _connectionConfigurator.UseFilter(clientFilter);
+            var transport = new ReceiveTransport<ClientContext>(_hostConfiguration, context,
+                () => context.ClientContextSupervisor, clientPipe);
 
-            var transport = new SqsReceiveTransport(_hostConfiguration, _settings, _connectionConfigurator.Build(), receiveEndpointContext);
-            transport.Add(consumerAgent);
-
-            var receiveEndpoint = new ReceiveEndpoint(transport, receiveEndpointContext);
+            var receiveEndpoint = new ReceiveEndpoint(transport, context);
 
             var queueName = _settings.EntityName ?? NewId.Next().ToString(FormatUtil.Formatter);
 
@@ -97,6 +87,9 @@
 
         public override IEnumerable<ValidationResult> Validate()
         {
+            if (_settings.PrefetchCount <= 0)
+                yield return this.Failure("PrefetchCount", "must be >= 1");
+
             var queueName = $"{_settings.EntityName}";
 
             if (!AmazonSqsEntityNameValidator.Validator.IsValidEntityName(_settings.EntityName))
@@ -127,11 +120,6 @@
 
                 Changed("AutoDelete");
             }
-        }
-
-        public ushort PrefetchCount
-        {
-            set => _settings.PrefetchCount = value;
         }
 
         public ushort WaitTimeSeconds
@@ -173,9 +161,13 @@
             configure?.Invoke(_connectionConfigurator);
         }
 
-        public AmazonSqsEndpointAddress GetEndpointAddress(Uri hostAddress)
+        SqsReceiveEndpointContext CreateSqsReceiveEndpointContext()
         {
-            return _settings.GetEndpointAddress(hostAddress);
+            var builder = new AmazonSqsReceiveEndpointBuilder(_hostConfiguration, this);
+
+            ApplySpecifications(builder);
+
+            return builder.CreateReceiveEndpointContext();
         }
 
         Uri FormatInputAddress()

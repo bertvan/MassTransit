@@ -40,7 +40,7 @@
         [OneTimeSetUp]
         public void Setup()
         {
-            _requestClient = Bus.CreateRequestClient<PingMessage>(InputQueueAddress, TimeSpan.FromSeconds(8));
+            _requestClient = Bus.CreateRequestClient<PingMessage>(InputQueueAddress, TestTimeout);
         }
 
         protected override void ConfigureRabbitMqReceiveEndpoint(IRabbitMqReceiveEndpointConfigurator configurator)
@@ -86,7 +86,7 @@
         [OneTimeSetUp]
         public void Setup()
         {
-            _requestClient = Bus.CreateRequestClient<PingMessage>(InputQueueAddress, TimeSpan.FromSeconds(8));
+            _requestClient = Bus.CreateRequestClient<PingMessage>(InputQueueAddress, TestTimeout);
         }
 
         protected override void ConfigureRabbitMqReceiveEndpoint(IRabbitMqReceiveEndpointConfigurator configurator)
@@ -125,7 +125,7 @@
         [OneTimeSetUp]
         public void Setup()
         {
-            _requestClient = Bus.CreateRequestClient<PingMessage>(InputQueueAddress, RequestTimeout.After(s: 8));
+            _requestClient = Bus.CreateRequestClient<PingMessage>(InputQueueAddress, TestTimeout);
 
             _response = _requestClient.GetResponse<PongMessage>(new PingMessage());
         }
@@ -156,7 +156,7 @@
         [OneTimeSetUp]
         public void Setup()
         {
-            _requestClient = Bus.CreateRequestClient<PingMessage>(new Uri("exchange:input_queue"), RequestTimeout.After(s: 8));
+            _requestClient = Bus.CreateRequestClient<PingMessage>(new Uri("exchange:input_queue"), TestTimeout);
 
             _response = _requestClient.GetResponse<PongMessage>(new PingMessage());
         }
@@ -173,6 +173,14 @@
         RabbitMqTestFixture
     {
         [Test]
+        [Order(0)]
+        public void Get_response()
+        {
+            _response = _requestClient.GetResponse<PongMessage>(new PingMessage());
+        }
+
+        [Test]
+        [Order(2)]
         public async Task Should_have_the_conversation_id()
         {
             ConsumeContext<PingMessage> ping = await _ping;
@@ -182,6 +190,7 @@
         }
 
         [Test]
+        [Order(1)]
         public async Task Should_receive_the_response()
         {
             Response<PongMessage> message = await _response;
@@ -200,9 +209,7 @@
         {
             _clientFactory = await Bus.CreateReplyToClientFactory();
 
-            _requestClient = Bus.CreateRequestClient<PingMessage>(InputQueueAddress, RequestTimeout.After(s: 8));
-
-            _response = _requestClient.GetResponse<PongMessage>(new PingMessage());
+            _requestClient = Bus.CreateRequestClient<PingMessage>(InputQueueAddress, TestTimeout);
         }
 
         [OneTimeTearDown]
@@ -269,9 +276,9 @@
         [OneTimeSetUp]
         public async Task Setup()
         {
-            _clientFactory = await Bus.ConnectClientFactory(RequestTimeout.After(s: 8));
+            _clientFactory = await Bus.ConnectClientFactory(TestTimeout);
 
-            _requestClient = _clientFactory.CreateRequestClient<PingMessage>(InputQueueAddress, RequestTimeout.After(s: 8));
+            _requestClient = _clientFactory.CreateRequestClient<PingMessage>(InputQueueAddress, TestTimeout);
 
             _response = _requestClient.GetResponse<PongMessage>(new PingMessage());
         }
@@ -326,7 +333,7 @@
         [OneTimeSetUp]
         public void Setup()
         {
-            _requestClient = Bus.CreateRequestClient<PingMessage>(InputQueueAddress, TimeSpan.FromSeconds(8));
+            _requestClient = Bus.CreateRequestClient<PingMessage>(InputQueueAddress, TestTimeout);
         }
 
         protected override void ConfigureRabbitMqReceiveEndpoint(IRabbitMqReceiveEndpointConfigurator configurator)
@@ -351,7 +358,7 @@
         [OneTimeSetUp]
         public void Setup()
         {
-            _requestClient = Bus.CreateRequestClient<PingMessage>(InputQueueAddress, TimeSpan.FromSeconds(8));
+            _requestClient = Bus.CreateRequestClient<PingMessage>(InputQueueAddress, TimeSpan.FromSeconds(4));
         }
     }
 
@@ -372,7 +379,7 @@
         [OneTimeSetUp]
         public void Setup()
         {
-            _requestClient = Bus.CreateRequestClient<PingMessage>(InputQueueAddress, TimeSpan.FromSeconds(8));
+            _requestClient = Bus.CreateRequestClient<PingMessage>(InputQueueAddress, TestTimeout);
         }
 
         protected override void ConfigureRabbitMqReceiveEndpoint(IRabbitMqReceiveEndpointConfigurator configurator)
@@ -387,6 +394,7 @@
         RabbitMqTestFixture
     {
         [Test]
+        [Retry(3)]
         public void Should_receive_the_exception()
         {
             Assert.That(async () => await _requestClient.GetResponse<PongMessage>(new PingMessage()), Throws.TypeOf<RequestFaultException>());
@@ -401,7 +409,7 @@
         {
             _clientFactory = await Bus.CreateReplyToClientFactory();
 
-            _requestClient = _clientFactory.CreateRequestClient<PingMessage>(InputQueueAddress, TimeSpan.FromSeconds(8));
+            _requestClient = _clientFactory.CreateRequestClient<PingMessage>(InputQueueAddress, TestTimeout);
         }
 
         [OneTimeTearDown]

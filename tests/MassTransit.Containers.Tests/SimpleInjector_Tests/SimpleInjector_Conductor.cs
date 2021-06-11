@@ -1,29 +1,29 @@
 namespace MassTransit.Containers.Tests.SimpleInjector_Tests
 {
+    using System.Threading.Tasks;
     using Common_Tests;
     using Microsoft.Extensions.DependencyInjection;
     using NUnit.Framework;
     using SimpleInjector;
-    using SimpleInjector.Lifestyles;
 
 
+    [TestFixture]
     public class SimpleInjector_Conductor :
         Common_Conductor
     {
         readonly Container _container;
 
-        public SimpleInjector_Conductor(bool instanceEndpoint)
-            : base(instanceEndpoint)
+        public SimpleInjector_Conductor()
         {
             _container = new Container();
-            _container.Options.DefaultScopedLifestyle = new AsyncScopedLifestyle();
+            _container.SetMassTransitContainerOptions();
             _container.AddMassTransit(ConfigureRegistration);
         }
 
         [OneTimeTearDown]
-        public void Close_container()
+        public async Task Close_container()
         {
-            _container.Dispose();
+            await _container.DisposeAsync();
         }
 
         protected override void ConfigureServiceEndpoints(IBusFactoryConfigurator<IInMemoryReceiveEndpointConfigurator> configurator)

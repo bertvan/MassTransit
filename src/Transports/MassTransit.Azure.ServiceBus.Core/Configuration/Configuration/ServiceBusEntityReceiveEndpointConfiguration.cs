@@ -5,7 +5,6 @@
     using System.Linq;
     using Contexts;
     using GreenPipes;
-    using GreenPipes.Agents;
     using GreenPipes.Builders;
     using GreenPipes.Configurators;
     using MassTransit.Configuration;
@@ -39,12 +38,7 @@
 
         public int MaxConcurrentCalls
         {
-            set => _settings.MaxConcurrentCalls = value;
-        }
-
-        public int PrefetchCount
-        {
-            set => _settings.PrefetchCount = value;
+            set => ConcurrentMessageLimit = value;
         }
 
         public TimeSpan AutoDeleteOnIdle
@@ -130,42 +124,21 @@
 
         protected void CreateReceiveEndpoint(IHost host, ServiceBusReceiveEndpointContext receiveEndpointContext)
         {
-            var transportObserver = receiveEndpointContext.TransportObservers;
-
-            IAgent consumerAgent;
             if (_hostConfiguration.DeployTopologyOnly)
-            {
-                var transportReadyFilter = new TransportReadyFilter<ClientContext>(receiveEndpointContext);
-                ClientPipeConfigurator.UseFilter(transportReadyFilter);
-
-                consumerAgent = transportReadyFilter;
-            }
+                ClientPipeConfigurator.UseFilter(new TransportReadyFilter<ClientContext>(receiveEndpointContext));
             else
             {
                 var messageReceiver = new BrokeredMessageReceiver(receiveEndpointContext);
 
-                var errorTransport = CreateErrorTransport();
-                var deadLetterTransport = CreateDeadLetterTransport();
-
-                receiveEndpointContext.GetOrAddPayload(() => deadLetterTransport);
-                receiveEndpointContext.GetOrAddPayload(() => errorTransport);
-
-                var receiverFilter = _settings.RequiresSession
-                    ? new MessageSessionReceiverFilter(messageReceiver, transportObserver)
-                    : new MessageReceiverFilter(messageReceiver, transportObserver);
-
-                ClientPipeConfigurator.UseFilter(receiverFilter);
-
-                consumerAgent = receiverFilter;
+                ClientPipeConfigurator.UseFilter(_settings.RequiresSession
+                    ? new MessageSessionReceiverFilter(messageReceiver, receiveEndpointContext)
+                    : new MessageReceiverFilter(messageReceiver, receiveEndpointContext));
             }
 
             IPipe<ClientContext> clientPipe = ClientPipeConfigurator.Build();
 
-            var supervisor = CreateClientContextSupervisor(_hostConfiguration.ConnectionContextSupervisor);
-
-            var transport = new ReceiveTransport(_settings, supervisor, clientPipe, receiveEndpointContext);
-
-            transport.Add(consumerAgent);
+            var transport = new ReceiveTransport<ClientContext>(_hostConfiguration, receiveEndpointContext, () => receiveEndpointContext
+                .ClientContextSupervisor, clientPipe);
 
             var receiveEndpoint = new ReceiveEndpoint(transport, receiveEndpointContext);
 
@@ -175,10 +148,5 @@
 
             ReceiveEndpoint = receiveEndpoint;
         }
-
-        protected abstract IErrorTransport CreateErrorTransport();
-        protected abstract IDeadLetterTransport CreateDeadLetterTransport();
-
-        protected abstract IClientContextSupervisor CreateClientContextSupervisor(IConnectionContextSupervisor supervisor);
     }
 }

@@ -72,7 +72,7 @@ namespace MassTransit.ActiveMqTransport.Topology.Topologies
 
         public void Bind(string topicName, Action<ITopicBindingConfigurator> configure = null)
         {
-            if (topicName.StartsWith("VirtualTopic."))
+            if (string.IsNullOrEmpty(_publishTopology.VirtualTopicPrefix) || topicName.StartsWith(_publishTopology.VirtualTopicPrefix))
             {
                 var consumerName = $"Consumer.{{queue}}.{topicName}";
 
@@ -100,7 +100,7 @@ namespace MassTransit.ActiveMqTransport.Topology.Topologies
 
         protected override IMessageConsumeTopologyConfigurator CreateMessageTopology<T>(Type type)
         {
-            var messageTopology = new ActiveMqMessageConsumeTopology<T>(_messageTopology.GetMessageTopology<T>(), _publishTopology.GetMessageTopology<T>(), _consumerNameProvider);
+            var messageTopology = new ActiveMqMessageConsumeTopology<T>(_publishTopology.GetMessageTopology<T>(), _consumerNameProvider);
 
             OnMessageTopologyCreated(messageTopology);
 

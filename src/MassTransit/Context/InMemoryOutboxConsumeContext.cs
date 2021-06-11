@@ -12,12 +12,14 @@ namespace MassTransit.Context
         OutboxContext
     {
         readonly TaskCompletionSource<InMemoryOutboxConsumeContext> _clearToSend;
+        readonly ConsumeContext _context;
         readonly InMemoryOutboxMessageSchedulerContext _outboxSchedulerContext;
         readonly List<Func<Task>> _pendingActions;
 
         public InMemoryOutboxConsumeContext(ConsumeContext context)
             : base(context)
         {
+            _context = context;
             var outboxReceiveContext = new InMemoryOutboxReceiveContext(this, context.ReceiveContext);
 
             ReceiveContext = outboxReceiveContext;
@@ -32,6 +34,8 @@ namespace MassTransit.Context
                 context.AddOrUpdatePayload(() => _outboxSchedulerContext, _ => _outboxSchedulerContext);
             }
         }
+
+        public ConsumeContext CapturedContext => _context;
 
         public Task ClearToSend => _clearToSend.Task;
 
@@ -100,6 +104,16 @@ namespace MassTransit.Context
                 }
             }
         }
+
+        public override Task NotifyConsumed<T>(ConsumeContext<T> context, TimeSpan duration, string consumerType)
+        {
+            return _context.NotifyConsumed(context, duration, consumerType);
+        }
+
+        public override Task NotifyFaulted<T>(ConsumeContext<T> context, TimeSpan duration, string consumerType, Exception exception)
+        {
+            return _context.NotifyFaulted(context, duration, consumerType, exception);
+        }
     }
 
 
@@ -120,12 +134,12 @@ namespace MassTransit.Context
 
         public virtual Task NotifyConsumed(TimeSpan duration, string consumerType)
         {
-            return base.NotifyConsumed(this, duration, consumerType);
+            return NotifyConsumed(this, duration, consumerType);
         }
 
         public virtual Task NotifyFaulted(TimeSpan duration, string consumerType, Exception exception)
         {
-            return base.NotifyFaulted(this, duration, consumerType, exception);
+            return NotifyFaulted(this, duration, consumerType, exception);
         }
     }
 }

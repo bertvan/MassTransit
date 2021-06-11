@@ -31,12 +31,19 @@
 
             var sendPipe = new SendPipe<T>(_context, message, pipe, cancellationToken);
 
-            return _context.ClientContextSupervisor.Send(sendPipe, cancellationToken);
+            return _context.Send(sendPipe, cancellationToken);
         }
 
         public ConnectHandle ConnectSendObserver(ISendObserver observer)
         {
             return _context.ConnectSendObserver(observer);
+        }
+
+        protected override Task StopSupervisor(StopSupervisorContext context)
+        {
+            TransportLogMessages.StoppingSendTransport(_context.EntityName);
+
+            return base.StopSupervisor(context);
         }
 
 
@@ -63,7 +70,7 @@
 
                 await _context.ConfigureTopologyPipe.Send(context).ConfigureAwait(false);
 
-                var sendContext = new TransportAmazonSqsSendContext<T>(_message, _cancellationToken);
+                var sendContext = new AmazonSqsMessageSendContext<T>(_message, _cancellationToken);
 
                 await _pipe.Send(sendContext).ConfigureAwait(false);
 
@@ -80,9 +87,16 @@
                     _context.SnsSetHeaderAdapter.Set(request.MessageAttributes, "Content-Type", sendContext.ContentType.MediaType);
                     _context.SnsSetHeaderAdapter.Set(request.MessageAttributes, nameof(sendContext.CorrelationId), sendContext.CorrelationId);
 
+                    if (!string.IsNullOrEmpty(sendContext.DeduplicationId))
+                        request.MessageDeduplicationId = sendContext.DeduplicationId;
+
+                    if (!string.IsNullOrEmpty(sendContext.GroupId))
+                        request.MessageGroupId = sendContext.GroupId;
+
                     await context.Publish(request, sendContext.CancellationToken).ConfigureAwait(false);
 
                     sendContext.LogSent();
+                    activity.AddSendContextHeadersPostSend(sendContext);
 
                     if (_context.SendObservers.Count > 0)
                         await _context.SendObservers.PostSend(sendContext).ConfigureAwait(false);

@@ -5,7 +5,6 @@
         using System;
         using System.Threading;
         using System.Threading.Tasks;
-        using Context;
         using GreenPipes;
         using GreenPipes.Internals.Extensions;
         using MassTransit.Testing;
@@ -138,6 +137,39 @@
             }
 
             [Test]
+            public async Task Should_startup_with_a_receive_endpoint()
+            {
+                ServiceBusTokenProviderSettings settings = new TestAzureServiceBusAccountSettings();
+
+                var serviceUri = AzureServiceBusEndpointUriCreator.Create(Configuration.ServiceNamespace);
+
+                var bus = Bus.Factory.CreateUsingAzureServiceBus(x =>
+                {
+                    BusTestFixture.ConfigureBusDiagnostics(x);
+                    x.Host(serviceUri, h => h.SharedAccessSignature(s =>
+                    {
+                        s.KeyName = settings.KeyName;
+                        s.SharedAccessKey = settings.SharedAccessKey;
+                        s.TokenTimeToLive = settings.TokenTimeToLive;
+                        s.TokenScope = settings.TokenScope;
+                    }));
+
+                    x.ReceiveEndpoint("no-messages-allowed", e =>
+                    {
+                    });
+                });
+
+                var busHandle = await bus.StartAsync();
+                try
+                {
+                }
+                finally
+                {
+                    await busHandle.StopAsync();
+                }
+            }
+
+            [Test]
             public async Task Should_support_the_new_syntax()
             {
                 ServiceBusTokenProviderSettings settings = new TestAzureServiceBusAccountSettings();
@@ -168,9 +200,6 @@
                     x.ReceiveEndpoint("input_queue", e =>
                     {
                         e.PrefetchCount = 16;
-
-                        e.UseExecute(context => Console.WriteLine(
-                            $"Received (input_queue): {context.ReceiveContext.TransportHeaders.Get("MessageId", "N/A")}, Types = ({string.Join(",", context.SupportedMessageTypes)})"));
 
                         e.Handler<A>(async context => completed.TrySetResult(context.Message));
 

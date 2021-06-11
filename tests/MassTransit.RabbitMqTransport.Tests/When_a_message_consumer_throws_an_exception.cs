@@ -1,6 +1,5 @@
 ﻿namespace MassTransit.RabbitMqTransport.Tests
 {
-    using System;
     using System.Threading.Tasks;
     using GreenPipes;
     using NUnit.Framework;
@@ -8,13 +7,11 @@
     using TestFramework;
 
 
+    [TestFixture]
+    [Category("Flaky")]
     public class When_a_message_consumer_throws_an_exception :
         RabbitMqTestFixture
     {
-        A _message;
-
-        TaskCompletionSource<A> _received;
-
         [Test]
         public async Task Should_be_received_by_the_handler()
         {
@@ -31,6 +28,15 @@
             fault.Message.Message.StringA.ShouldBe("ValueA");
         }
 
+        A _message;
+
+        TaskCompletionSource<A> _received;
+
+        protected override void ConfigureRabbitMqBus(IRabbitMqBusFactoryConfigurator configurator)
+        {
+            configurator.AutoStart = true;
+        }
+
         protected override void ConfigureRabbitMqReceiveEndpoint(IRabbitMqReceiveEndpointConfigurator configurator)
         {
             _received = GetTask<A>();
@@ -44,12 +50,9 @@
         }
 
 
-        public class A :
-            CorrelatedBy<Guid>
+        public class A
         {
             public string StringA { get; set; }
-
-            public Guid CorrelationId => Guid.Empty;
         }
     }
 }
