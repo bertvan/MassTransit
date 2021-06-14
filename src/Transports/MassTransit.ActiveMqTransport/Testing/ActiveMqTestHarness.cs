@@ -15,12 +15,12 @@
 
         public ActiveMqTestHarness(string inputQueueName = null)
         {
-            Username = "admin";
-            Password = "admin";
+            Username = "mtpoc";
+            Password = "mtpoc";
 
             InputQueueName = inputQueueName ?? "input_queue";
 
-            HostAddress = new Uri("activemq://localhost/");
+            HostAddress = new Uri("activemq://localhost:61616");
         }
 
         public Uri HostAddress
@@ -93,6 +93,8 @@
         {
             var busControl = MassTransit.Bus.Factory.CreateUsingActiveMq(x =>
             {
+                x.UseBrokerFlavor(ActiveMqFlavor.Artemis);
+
                 ConfigureHost(x);
 
                 ConfigureBus(x);

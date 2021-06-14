@@ -11,7 +11,5 @@
             where T : class;
 
         void AddSpecification(IActiveMqConsumeTopologySpecification specification);
-
-        void UseBrokerFlavor(ActiveMqFlavor flavor);
     }
 }

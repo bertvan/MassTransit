@@ -16,5 +16,7 @@
         /// this setting will use the specified prefix instead (or "", if so specified).
         /// </summary>
         new string VirtualTopicPrefix { set; }
+
+        void UseBrokerFlavor(ActiveMqFlavor flavor);
     }
 }

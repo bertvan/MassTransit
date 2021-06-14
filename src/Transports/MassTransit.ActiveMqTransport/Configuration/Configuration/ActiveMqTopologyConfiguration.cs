@@ -16,14 +16,12 @@
     {
         readonly IActiveMqConsumeTopologyConfigurator _consumeTopology;
         readonly IMessageTopologyConfigurator _messageTopology;
-        readonly ActiveMqFlavor _flavor;
         readonly IActiveMqPublishTopologyConfigurator _publishTopology;
         readonly IActiveMqSendTopologyConfigurator _sendTopology;
 
-        public ActiveMqTopologyConfiguration(IMessageTopologyConfigurator messageTopology, ActiveMqFlavor flavor)
+        public ActiveMqTopologyConfiguration(IMessageTopologyConfigurator messageTopology)
         {
             _messageTopology = messageTopology;
-            _flavor = flavor;
 
             _sendTopology = new ActiveMqSendTopology();
             _sendTopology.ConnectSendTopologyConfigurationObserver(new DelegateSendTopologyConfigurationObserver(GlobalTopology.Send));

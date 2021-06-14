@@ -11,6 +11,7 @@
         IActiveMqBusConfiguration
     {
         readonly BusObservable _busObservers;
+        ActiveMqFlavor _brokerFlavor;
 
         public ActiveMqBusConfiguration(IActiveMqTopologyConfiguration topologyConfiguration)
             : base(topologyConfiguration)
@@ -23,7 +24,16 @@
 
         IHostConfiguration IBusConfiguration.HostConfiguration => HostConfiguration;
         IEndpointConfiguration IBusConfiguration.BusEndpointConfiguration => BusEndpointConfiguration;
+
+        public void UseBrokerFlavor(ActiveMqFlavor flavor)
+        {
+            _brokerFlavor = flavor;
+            Topology.Publish.UseBrokerFlavor(flavor);
+        }
+
         IBusObserver IBusConfiguration.BusObservers => _busObservers;
+
+        public ActiveMqFlavor BrokerFlavor => _brokerFlavor;
 
         public IActiveMqEndpointConfiguration BusEndpointConfiguration { get; }
         public IActiveMqHostConfiguration HostConfiguration { get; }

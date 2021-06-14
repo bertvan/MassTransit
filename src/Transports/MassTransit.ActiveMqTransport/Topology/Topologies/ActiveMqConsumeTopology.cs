@@ -18,7 +18,6 @@ namespace MassTransit.ActiveMqTransport.Topology.Topologies
         readonly IActiveMqPublishTopology _publishTopology;
         readonly IList<IActiveMqConsumeTopologySpecification> _specifications;
 
-        ActiveMqConsumerNameProvider _consumerNameProvider;
         string _queueNamePrefix;
 
         public ActiveMqConsumeTopology(IMessageTopology messageTopology, IActiveMqPublishTopology publishTopology)
@@ -40,16 +39,6 @@ namespace MassTransit.ActiveMqTransport.Topology.Topologies
                 throw new ArgumentNullException(nameof(specification));
 
             _specifications.Add(specification);
-        }
-
-        public void UseBrokerFlavor(ActiveMqFlavor flavor)
-        {
-            if (flavor == ActiveMqFlavor.Artemis)
-            {
-                _consumerNameProvider = new FqqnConsumerNameProvider();
-            }
-
-            _consumerNameProvider = new ClassicConsumerNameProvider();
         }
 
         public void UsePrefix(string queueNamePrefix)
@@ -100,7 +89,9 @@ namespace MassTransit.ActiveMqTransport.Topology.Topologies
 
         protected override IMessageConsumeTopologyConfigurator CreateMessageTopology<T>(Type type)
         {
-            var messageTopology = new ActiveMqMessageConsumeTopology<T>(_publishTopology.GetMessageTopology<T>(), _consumerNameProvider);
+            var messageTopology = new ActiveMqMessageConsumeTopology<T>(
+                _publishTopology.GetMessageTopology<T>(),
+                new ActiveMqFlavorImplementationFactory(_publishTopology.BrokerFlavor).GetConsumerNameProvider());
 
             OnMessageTopologyCreated(messageTopology);
 

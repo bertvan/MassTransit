@@ -10,5 +10,7 @@ namespace MassTransit.ActiveMqTransport.Topology
             where T : class;
 
         string VirtualTopicPrefix { get; }
+
+        ActiveMqFlavor BrokerFlavor { get; }
     }
 }

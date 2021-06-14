@@ -17,5 +17,7 @@
         /// </summary>
         /// <returns></returns>
         IActiveMqEndpointConfiguration CreateEndpointConfiguration();
+
+        void UseBrokerFlavor(ActiveMqFlavor flavor);
     }
 }

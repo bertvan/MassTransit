@@ -26,6 +26,13 @@ namespace MassTransit.ActiveMqTransport.Topology.Topologies
 
         public string VirtualTopicPrefix { get; set; }
 
+        public ActiveMqFlavor BrokerFlavor { get; set; }
+
+        public void UseBrokerFlavor(ActiveMqFlavor flavor)
+        {
+            BrokerFlavor = flavor;
+        }
+
         IActiveMqMessagePublishTopologyConfigurator<T> IActiveMqPublishTopologyConfigurator.GetMessageTopology<T>()
         {
             return GetMessageTopology<T>() as IActiveMqMessagePublishTopologyConfigurator<T>;

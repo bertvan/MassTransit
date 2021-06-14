@@ -47,12 +47,9 @@
 
         public void UseBrokerFlavor(ActiveMqFlavor flavor)
         {
-            if (flavor == ActiveMqFlavor.Artemis)
-            {
-
-            }
-
-            _busConfiguration.Topology.Consume.UseBrokerFlavor(flavor);
+            _busConfiguration.UseBrokerFlavor(flavor);
+            //_busConfiguration.BusEndpointConfiguration.UseBrokerFlavor(flavor);
+            //_busConfiguration.Topology.Consume.UseBrokerFlavor(flavor);
         }
 
         void IActiveMqBusFactoryConfigurator.Send<T>(Action<IActiveMqMessageSendTopologyConfigurator<T>> configureTopology)

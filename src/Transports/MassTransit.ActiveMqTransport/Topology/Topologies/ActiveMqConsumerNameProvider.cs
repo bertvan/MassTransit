@@ -6,11 +6,33 @@
     }
 
 
+    public class ActiveMqFlavorImplementationFactory
+    {
+        readonly ActiveMqFlavor _flavor;
+
+        public ActiveMqFlavorImplementationFactory(ActiveMqFlavor flavor)
+        {
+            _flavor = flavor;
+        }
+
+        public ActiveMqConsumerNameProvider GetConsumerNameProvider()
+        {
+            if (_flavor == ActiveMqFlavor.Artemis)
+            {
+                return new FqqnConsumerNameProvider();
+            }
+
+            return new ClassicConsumerNameProvider();
+        }
+    }
+
     public class FqqnConsumerNameProvider : ActiveMqConsumerNameProvider
     {
         public string GetConsumerName(string entityName)
         {
-            return $"VirtualTopic.{entityName}::Consumer.{{queue}}.VirtualTopic.{entityName}";
+            // Original:
+            // return $"VirtualTopic.{entityName}::Consumer.{{queue}}.VirtualTopic.{entityName}";
+            return $"{entityName}::Consumer.{{queue}}.{entityName}";
         }
     }
 
